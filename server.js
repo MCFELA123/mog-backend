@@ -176,6 +176,76 @@ const sendVerificationEmail = async (email, code, firstName = '') => {
   }
 };
 
+/**
+ * Send password reset email with code
+ */
+const sendPasswordResetEmail = async (email, code, firstName = '') => {
+  const emailHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0a0a0a; color: #ffffff; margin: 0; padding: 0; }
+        .container { max-width: 500px; margin: 0 auto; padding: 40px 20px; }
+        .logo { text-align: center; margin-bottom: 30px; }
+        .logo h1 { font-size: 32px; font-weight: 900; background: linear-gradient(135deg, #A259FF, #FF4D9E); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
+        .card { background: linear-gradient(145deg, #1a1a1a, #0d0d0d); border: 1px solid #333; border-radius: 16px; padding: 30px; text-align: center; }
+        .greeting { font-size: 18px; color: #aaa; margin-bottom: 10px; }
+        .title { font-size: 24px; font-weight: 700; margin-bottom: 20px; }
+        .code-box { background: linear-gradient(135deg, #FF4D9E20, #A259FF20); border: 2px solid #FF4D9E; border-radius: 12px; padding: 20px; margin: 20px 0; }
+        .code { font-size: 36px; font-weight: 900; letter-spacing: 8px; color: #ffffff; }
+        .expires { font-size: 14px; color: #888; margin-top: 20px; }
+        .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #666; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="logo">
+          <h1>MOG.AI</h1>
+        </div>
+        <div class="card">
+          <p class="greeting">Hey${firstName ? ' ' + firstName : ''} 👋</p>
+          <p class="title">Reset your password</p>
+          <p style="color: #aaa; font-size: 14px;">Use this code to reset your Mog.ai password</p>
+          <div class="code-box">
+            <div class="code">${code}</div>
+          </div>
+          <p class="expires">This code expires in 10 minutes</p>
+        </div>
+        <div class="footer">
+          <p>If you didn't request a password reset, you can ignore this email.</p>
+          <p>© ${new Date().getFullYear()} Mog.ai - Become the best version of yourself</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  // Check if Gmail is configured
+  if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
+    console.log(`[EMAIL] Gmail not configured. Password reset code for ${email}: ${code}`);
+    return { success: true, method: 'console' };
+  }
+
+  try {
+    const mailOptions = {
+      from: `"Mog.ai" <${GMAIL_USER}>`,
+      to: email,
+      subject: `${code} is your Mog.ai password reset code`,
+      html: emailHtml,
+      text: `Your Mog.ai password reset code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, you can ignore this email.`,
+    };
+
+    await emailTransporter.sendMail(mailOptions);
+    console.log(`[EMAIL] Password reset email sent to ${email}`);
+    return { success: true, method: 'gmail' };
+  } catch (error) {
+    console.error(`[EMAIL] Failed to send password reset email to ${email}:`, error.message);
+    console.log(`[EMAIL] Fallback - Password reset code for ${email}: ${code}`);
+    return { success: false, method: 'console', error: error.message };
+  }
+};
+
 // =====================================================
 // AI PHYSIQUE ANALYSIS (OpenAI Vision API)
 // =====================================================
@@ -423,6 +493,7 @@ Look at BOTH images carefully. Base your scores on what you ACTUALLY SEE in each
 Respond with JSON only, no markdown, no explanation.`;
 
     console.log('[AI] Calling OpenAI Vision API...');
+    const analysisStartTime = Date.now();
     
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -431,7 +502,7 @@ Respond with JSON only, no markdown, no explanation.`;
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-4o', // Use gpt-4o instead of gpt-5 for faster response (~15-30sec vs 60-90sec)
         messages: [
           { role: 'system', content: systemPrompt },
           { 
@@ -442,22 +513,23 @@ Respond with JSON only, no markdown, no explanation.`;
             ]
           }
         ],
-        max_tokens: 1500,
-        temperature: 0.2, // Lower for more consistent, precise analysis
+        max_tokens: 2000, // Sufficient for JSON response
+        response_format: { type: 'json_object' }, // Force JSON output
       }),
     });
 
     if (!response.ok) {
       const error = await response.text();
-      console.error('[AI] OpenAI API error:', error);
+      console.error('[AI] OpenAI API error:', response.status, error);
       return simulatePhysiqueAnalysis(onboardingData);
     }
 
     const data = await response.json();
-    const content = data.choices[0]?.message?.content;
+    console.log(`[AI] Analysis completed in ${Date.now() - analysisStartTime}ms`);
+    const content = data.choices?.[0]?.message?.content;
     
     if (!content) {
-      console.error('[AI] No content in response');
+      console.error('[AI] No content in response. Full data:', JSON.stringify(data));
       return simulatePhysiqueAnalysis(onboardingData);
     }
 
@@ -486,25 +558,27 @@ Respond with JSON only, no markdown, no explanation.`;
       };
     }
 
-    // Validate and normalize the response
+    // Validate and normalize the response - preserve null for non-visible body parts
     const normalizedAnalysis = {
       isValidPhysique: true,
       mogScore: Math.max(0, Math.min(100, analysis.mogScore || 50)),
       tier: getTierFromScore(analysis.mogScore || 50),
       muscleBreakdown: {
-        chest: analysis.muscleBreakdown?.chest || 50,
-        shoulders: analysis.muscleBreakdown?.shoulders || 50,
-        back: analysis.muscleBreakdown?.back || 50,
-        arms: analysis.muscleBreakdown?.arms || 50,
-        legs: analysis.muscleBreakdown?.legs || 50,
-        core: analysis.muscleBreakdown?.core || 50,
-        leanness: analysis.muscleBreakdown?.leanness || 50,
+        // Only include values if AI detected them, otherwise keep null (UI will hide them)
+        chest: analysis.muscleBreakdown?.chest ?? null,
+        shoulders: analysis.muscleBreakdown?.shoulders ?? null,
+        back: analysis.muscleBreakdown?.back ?? null,
+        arms: analysis.muscleBreakdown?.arms ?? null,
+        legs: analysis.muscleBreakdown?.legs ?? null,
+        core: analysis.muscleBreakdown?.core ?? null,
+        leanness: analysis.muscleBreakdown?.leanness ?? null,
       },
-      weakPoints: analysis.weakPoints || ['legs', 'back'],
-      strongPoints: analysis.strongPoints || ['chest', 'arms'],
+      notVisible: analysis.notVisible || [], // Body parts the AI couldn't see
+      weakPoints: analysis.weakPoints || [],
+      strongPoints: analysis.strongPoints || [],
       symmetry: analysis.symmetry || 70,
       overallAssessment: analysis.overallAssessment || 'Analysis complete.',
-      improvementTips: analysis.improvementTips || ['Focus on compound movements', 'Prioritize protein intake', 'Get adequate rest'],
+      improvementTips: analysis.improvementTips || [],
       scanSteps: analysis.scanSteps || [],
       aiPowered: true,
     };
@@ -707,13 +781,214 @@ const calculateNutritionTargets = (onboardingData) => {
   const fatGrams = Math.round((calorieTarget * 0.25) / 9);
   const carbGrams = Math.round((calorieTarget - (proteinGrams * 4) - (fatGrams * 9)) / 4);
   
+  // Determine nutrition mode based on goal
+  let mode, modeDescription, modeIcon;
+  if (primaryGoal === 'lean') {
+    mode = 'cutting';
+    modeDescription = 'Cutting mode. Burn fat, preserve muscle.';
+    modeIcon = 'flame';
+  } else if (primaryGoal === 'build-size') {
+    mode = 'lean bulk';
+    modeDescription = 'Lean-bulk mode. Build clean size.';
+    modeIcon = 'dumbbell';
+  } else {
+    mode = 'recomp';
+    modeDescription = 'Recomp mode. Build muscle, lose fat.';
+    modeIcon = 'target';
+  }
+  
   return {
     calories: calorieTarget,
     protein: proteinGrams,
     carbs: carbGrams,
     fats: fatGrams,
-    mode: primaryGoal === 'lean' ? 'cutting' : primaryGoal === 'build-size' ? 'lean bulk' : 'recomp',
+    mode,
+    modeDescription,
+    modeIcon,
   };
+};
+
+// AI-powered nutrition mode analysis based on eating patterns
+const analyzeNutritionModeWithAI = async (userId, targets, recentLogs, onboardingData) => {
+  if (!openai) {
+    console.log('[NUTRITION] OpenAI not available for mode analysis');
+    return null;
+  }
+  
+  try {
+    console.log(`[NUTRITION] Analyzing mode for user ${userId} with ${recentLogs.length} logs`);
+    
+    // Calculate averages from recent logs (if any)
+    const hasLogs = recentLogs.length > 0;
+    const totalDays = hasLogs ? Math.max(1, new Set(recentLogs.map(l => l.date.toISOString().split('T')[0])).size) : 0;
+    const totals = recentLogs.reduce((acc, log) => ({
+      calories: acc.calories + (log.calories || 0),
+      protein: acc.protein + (log.protein || 0),
+      carbs: acc.carbs + (log.carbs || 0),
+      fats: acc.fats + (log.fats || 0),
+    }), { calories: 0, protein: 0, carbs: 0, fats: 0 });
+    
+    const avgCalories = hasLogs ? Math.round(totals.calories / totalDays) : 0;
+    const avgProtein = hasLogs ? Math.round(totals.protein / totalDays) : 0;
+    const avgCarbs = hasLogs ? Math.round(totals.carbs / totalDays) : 0;
+    const avgFats = hasLogs ? Math.round(totals.fats / totalDays) : 0;
+    
+    // Get meal names for context
+    const recentMeals = recentLogs.slice(-10).map(l => l.meal?.name || 'meal').join(', ');
+    
+    // Build context based on whether we have meal data
+    const mealContext = hasLogs 
+      ? `ACTUAL AVERAGES (last ${totalDays} days):
+- Avg Calories: ${avgCalories}/day (${avgCalories < targets.calories ? 'deficit' : avgCalories > targets.calories ? 'surplus' : 'maintenance'})
+- Avg Protein: ${avgProtein}g/day (${Math.round(avgProtein/targets.protein*100)}% of target)
+- Avg Carbs: ${avgCarbs}g/day
+- Avg Fats: ${avgFats}g/day
+
+RECENT MEALS: ${recentMeals}`
+      : `No meals logged yet. User is just starting their nutrition journey.`;
+    
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a fitness nutrition AI coach. Analyze the user's eating patterns OR their stated goal to determine their nutrition mode.
+
+Based on their actual eating behavior (if available) or their stated goal, determine which mode best describes their current/intended nutrition approach.
+
+Available modes:
+1. "cutting" - Eating in a caloric deficit, high protein, losing fat. Icon: "flame"
+2. "lean bulk" - Eating in a slight surplus, high protein, gaining muscle. Icon: "dumbbell"  
+3. "recomp" - Eating at maintenance, body recomposition. Icon: "target"
+4. "aggressive cut" - Eating in a significant deficit, very high protein. Icon: "flame"
+5. "mass gain" - Eating in a larger surplus for size. Icon: "dumbbell"
+6. "shred mode" - Getting lean and defined. Icon: "flame"
+7. "bulk season" - Building maximum size. Icon: "dumbbell"
+
+Provide a short, punchy, MOTIVATING description (max 35 chars) that sounds like a coach hyping them up.
+
+Examples of good descriptions:
+- "Shredding fat. Stay locked in."
+- "Building size. Eat big, lift big."
+- "Optimizing gains. Perfect balance."
+
+Respond ONLY in JSON:
+{
+  "mode": "mode name (lowercase)",
+  "description": "Short punchy description. Max 35 chars.",
+  "icon": "flame" | "dumbbell" | "target"
+}`
+        },
+        {
+          role: 'user',
+          content: `Analyze this user's nutrition situation:
+
+DAILY TARGETS:
+- Calories: ${targets.calories}/day
+- Protein: ${targets.protein}g/day
+
+${mealContext}
+
+USER'S STATED GOAL: ${onboardingData?.primaryGoal || 'aesthetics'}
+(lean = lose fat, build-size = gain muscle, aesthetics = balanced)
+
+Determine their nutrition mode and give them a motivating description.`
+        }
+      ],
+      max_tokens: 150,
+      temperature: 0.7,
+    });
+    
+    const content = completion.choices?.[0]?.message?.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      console.log(`[NUTRITION] AI mode: ${parsed.mode} - "${parsed.description}"`);
+      return {
+        mode: parsed.mode,
+        modeDescription: parsed.description,
+        modeIcon: parsed.icon || 'target',
+      };
+    }
+  } catch (err) {
+    console.error('[NUTRITION] AI mode analysis error:', err.message);
+  }
+  
+  return null; // Fallback to default mode
+};
+
+// AI-powered diet discipline analysis
+const analyzeDietDisciplineWithAI = async (weekData, targets, logs) => {
+  if (!openai || logs.length === 0) {
+    return null;
+  }
+  
+  try {
+    // Prepare day-by-day summary
+    const daySummaries = weekData.map(day => {
+      const percentCal = targets.calories > 0 ? Math.round((day.calories / targets.calories) * 100) : 0;
+      const percentPro = targets.protein > 0 ? Math.round((day.protein / targets.protein) * 100) : 0;
+      return `${day.day} (${day.date}): ${day.calories} cal (${percentCal}%), ${day.protein}g protein (${percentPro}%) - ${day.status}`;
+    }).join('\n');
+    
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a fitness nutrition coach AI. Analyze the user's weekly eating discipline and provide accurate status for each day.
+
+Rules for determining day status:
+- "complete": Day has logged meals AND calories are within 85-115% of target AND protein is at least 75% of target
+- "pending": Today or future days (user hasn't finished eating yet)
+- "notComplete": Past day with either no meals logged OR significantly off targets
+
+Analyze the actual data carefully. Be honest but encouraging.
+
+Respond ONLY in JSON:
+{
+  "weekData": [
+    { "day": "Mon", "status": "complete" | "pending" | "notComplete", "reason": "brief reason" },
+    { "day": "Tue", "status": "complete" | "pending" | "notComplete", "reason": "brief reason" },
+    ...for all 7 days
+  ],
+  "streak": number (consecutive complete days ending yesterday),
+  "compliance": number (0-100 percentage of past days that were complete),
+  "insight": "One short motivating sentence about their discipline"
+}`
+        },
+        {
+          role: 'user',
+          content: `Analyze this user's diet discipline for the week:
+
+DAILY TARGETS:
+- Calories: ${targets.calories}/day
+- Protein: ${targets.protein}g/day
+
+WEEKLY DATA:
+${daySummaries}
+
+Today is: ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}
+
+Determine the accurate status for each day based on the actual nutrition data.`
+        }
+      ],
+      max_tokens: 400,
+      temperature: 0.3,
+    });
+    
+    const content = completion.choices?.[0]?.message?.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      console.log(`[NUTRITION] AI discipline: ${parsed.compliance}% compliance, streak: ${parsed.streak}`);
+      return parsed;
+    }
+  } catch (err) {
+    console.error('[NUTRITION] AI discipline analysis error:', err.message);
+  }
+  
+  return null;
 };
 
 // =====================================================
@@ -908,14 +1183,14 @@ app.post('/api/auth/resend-code', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     if (user.password !== password) return res.status(401).json({ success: false, message: 'Invalid password' });
     
     const onboarding = await Onboarding.findOne({ userId: user.userId });
-    const scan = await Scan.findOne({ odeinuserIdg: user.userId }).sort({ createdAt: -1 });
+    const scan = await Scan.findOne({ userId: user.userId }).sort({ createdAt: -1 });
     
-    console.log(`[LOGIN] ${email}`);
+    console.log(`[LOGIN] ${email} - Found scan:`, scan ? `Score: ${scan.mogScore}, Tier: ${scan.tier}` : 'No scan');
     
     res.json({
       success: true,
@@ -925,17 +1200,119 @@ app.post('/api/auth/login', async (req, res) => {
         username: user.username,
         firstName: user.firstName,
         lastName: user.lastName,
-        mogScore: user.mogScore,
-        tier: user.tier,
+        mogScore: scan?.mogScore || user.mogScore,
+        tier: scan?.tier || user.tier,
         streak: user.streak,
         isVerified: user.isVerified,
-        muscleBreakdown: scan?.results?.muscleBreakdown || null,
+        muscleBreakdown: scan?.muscleBreakdown || null,
       },
+      latestScan: scan ? {
+        scanId: scan.scanId,
+        mogScore: scan.mogScore,
+        tier: scan.tier,
+        muscleBreakdown: scan.muscleBreakdown,
+        weakPoints: scan.weakPoints,
+        strongPoints: scan.strongPoints,
+        symmetry: scan.symmetry,
+        overallAssessment: scan.overallAssessment,
+        improvementTips: scan.improvementTips,
+        frontPhotoUrl: scan.frontPhotoUrl,
+        backPhotoUrl: scan.backPhotoUrl,
+        timestamp: scan.timestamp,
+      } : null,
       onboardingData: onboarding?.data || null,
       tokens: { accessToken: `access_${generateId()}`, refreshToken: `refresh_${generateId()}` },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Login failed', error: err.message });
+  }
+});
+
+// ----- FORGOT PASSWORD -----
+
+/**
+ * Request password reset
+ * POST /api/auth/forgot-password
+ */
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  
+  if (!email) {
+    return res.status(400).json({ success: false, message: 'Email is required' });
+  }
+  
+  try {
+    const user = await User.findOne({ email: email.toLowerCase() });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'No account found with this email' });
+    }
+    
+    // Generate reset code
+    const resetCode = generateVerificationCode();
+    const resetExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    
+    // Store reset code on user
+    user.resetCode = resetCode;
+    user.resetCodeExpiry = resetExpiry;
+    await user.save();
+    
+    // Send reset email
+    await sendPasswordResetEmail(email, resetCode, user.firstName);
+    
+    console.log(`[PASSWORD RESET] Code sent to ${email}`);
+    
+    res.json({ success: true, message: 'Password reset code sent to your email' });
+  } catch (err) {
+    console.error('[PASSWORD RESET] Error:', err);
+    res.status(500).json({ success: false, message: 'Failed to send reset code' });
+  }
+});
+
+/**
+ * Reset password with code
+ * POST /api/auth/reset-password
+ */
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ success: false, message: 'Email, code, and new password are required' });
+  }
+  
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+  }
+  
+  try {
+    const user = await User.findOne({ email: email.toLowerCase() });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    // Check reset code
+    if (!user.resetCode || user.resetCode !== code) {
+      return res.status(400).json({ success: false, message: 'Invalid reset code' });
+    }
+    
+    // Check if code expired
+    if (!user.resetCodeExpiry || new Date() > new Date(user.resetCodeExpiry)) {
+      return res.status(400).json({ success: false, message: 'Reset code has expired' });
+    }
+    
+    // Update password and clear reset code
+    user.password = newPassword;
+    user.resetCode = null;
+    user.resetCodeExpiry = null;
+    await user.save();
+    
+    console.log(`[PASSWORD RESET] Password updated for ${email}`);
+    
+    res.json({ success: true, message: 'Password reset successfully' });
+  } catch (err) {
+    console.error('[PASSWORD RESET] Error:', err);
+    res.status(500).json({ success: false, message: 'Failed to reset password' });
   }
 });
 
@@ -962,12 +1339,200 @@ app.get('/api/onboarding/:id', async (req, res) => {
   }
 });
 
+/**
+ * Update onboarding data (account info - height, weight, gender, age)
+ * PUT /api/onboarding/update
+ */
+app.put('/api/onboarding/update', async (req, res) => {
+  try {
+    const { userId, data } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+
+    const onboarding = await Onboarding.findOne({ userId });
+    
+    if (!onboarding) {
+      return res.status(404).json({ success: false, error: 'Onboarding data not found' });
+    }
+
+    // Update only the provided fields
+    if (data.heightFeet !== undefined) onboarding.data.heightFeet = data.heightFeet;
+    if (data.heightInches !== undefined) onboarding.data.heightInches = data.heightInches;
+    if (data.weightLbs !== undefined) onboarding.data.weightLbs = data.weightLbs;
+    if (data.gender !== undefined) onboarding.data.gender = data.gender;
+    if (data.age !== undefined) onboarding.data.age = data.age;
+
+    await onboarding.save();
+
+    console.log(`[ONBOARDING] Updated account info for user: ${userId}`);
+    res.json({ success: true, message: 'Account information updated', data: onboarding.data });
+  } catch (err) {
+    console.error('[ONBOARDING] Update error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Update user profile (name, email)
+ * PUT /api/user/update-profile
+ */
+app.put('/api/user/update-profile', async (req, res) => {
+  try {
+    const { userId, firstName, lastName, email } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+
+    const user = await User.findOne({ userId });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Check if email is being changed to an existing email
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email, userId: { $ne: userId } });
+      if (existingUser) {
+        return res.status(400).json({ success: false, error: 'Email already in use by another account' });
+      }
+      // If email changed, mark as unverified
+      user.email = email;
+      user.isVerified = false;
+      user.verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    }
+
+    if (firstName !== undefined) user.firstName = firstName;
+    if (lastName !== undefined) user.lastName = lastName;
+    if (firstName || lastName) {
+      user.username = `${firstName || user.firstName}${lastName || user.lastName}`.toLowerCase().replace(/\s/g, '');
+    }
+
+    await user.save();
+
+    console.log(`[USER] Updated profile for user: ${userId}`);
+    res.json({ 
+      success: true, 
+      message: 'Profile updated successfully',
+      user: {
+        userId: user.userId,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
+        isVerified: user.isVerified,
+      }
+    });
+  } catch (err) {
+    console.error('[USER] Update profile error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ----- SCAN -----
+
+// Verify if new scan photo is the same person as previous scan
+const verifyUserIdentity = async (newFrontPhoto, previousFrontPhoto) => {
+  if (!OPENAI_API_KEY || !openai) {
+    console.log('[IDENTITY] No API key, skipping identity verification');
+    return { isSamePerson: true }; // Skip verification if no API key
+  }
+  
+  if (!newFrontPhoto || !previousFrontPhoto) {
+    console.log('[IDENTITY] Missing photos for comparison, skipping verification');
+    return { isSamePerson: true };
+  }
+  
+  try {
+    console.log('[IDENTITY] Verifying if new photo matches previous scan...');
+    const startTime = Date.now();
+    
+    // Prepare image content
+    const imageContent = [];
+    
+    // New front photo
+    const newPhotoBase64 = newFrontPhoto.startsWith('data:') 
+      ? newFrontPhoto 
+      : `data:image/jpeg;base64,${newFrontPhoto}`;
+    imageContent.push({
+      type: 'image_url',
+      image_url: { url: newPhotoBase64, detail: 'low' }
+    });
+    
+    // Previous front photo
+    const prevPhotoBase64 = previousFrontPhoto.startsWith('data:') 
+      ? previousFrontPhoto 
+      : `data:image/jpeg;base64,${previousFrontPhoto}`;
+    imageContent.push({
+      type: 'image_url',
+      image_url: { url: prevPhotoBase64, detail: 'low' }
+    });
+    
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini', // Use faster mini model for identity check
+      max_tokens: 200,
+      messages: [
+        {
+          role: 'system',
+          content: `You verify if two fitness photos show the SAME person. Compare: skin tone, body proportions, tattoos, gender. Physique changes (muscle/fat) are normal in fitness apps. ONLY flag different if CLEARLY different person (different gender, completely different skin color, impossible size difference). When in doubt, say SAME. JSON only: {"isSamePerson": true/false, "confidence": 0-100, "reason": "brief"}`
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Same person?' },
+            ...imageContent
+          ]
+        }
+      ],
+      response_format: { type: 'json_object' }
+    });
+    
+    const result = JSON.parse(response.choices[0].message.content);
+    console.log(`[IDENTITY] Verification: ${result.isSamePerson ? 'SAME' : 'DIFFERENT'} (${result.confidence}%) - ${result.reason} [${Date.now() - startTime}ms]`);
+    
+    return {
+      isSamePerson: result.isSamePerson,
+      confidence: result.confidence,
+      reason: result.reason
+    };
+  } catch (error) {
+    console.error('[IDENTITY] Verification error:', error.message);
+    // On error, allow the scan to proceed (don't block users due to AI errors)
+    return { isSamePerson: true, error: error.message };
+  }
+};
 
 app.post('/api/scan/analyze', async (req, res) => {
   const { userId, frontPhoto, backPhoto, onboardingData } = req.body;
   
   try {
+    // Check if user has a previous scan and verify identity
+    if (userId) {
+      const previousScan = await Scan.findOne({ userId }).sort({ timestamp: -1 });
+      
+      if (previousScan && previousScan.frontPhotoUrl) {
+        console.log(`[SCAN] User ${userId} has previous scan, verifying identity...`);
+        
+        const identityCheck = await verifyUserIdentity(frontPhoto, previousScan.frontPhotoUrl);
+        
+        if (!identityCheck.isSamePerson) {
+          console.log(`[SCAN] Identity verification FAILED for user ${userId}: ${identityCheck.reason}`);
+          return res.status(400).json({
+            success: false,
+            differentUser: true,
+            message: `This doesn't appear to be the same person as your previous scans. ${identityCheck.reason || 'Please upload photos of yourself for accurate progress tracking.'}`,
+            confidence: identityCheck.confidence
+          });
+        }
+        
+        console.log(`[SCAN] Identity verified for user ${userId}`);
+      } else {
+        console.log(`[SCAN] No previous scan for user ${userId}, skipping identity check`);
+      }
+    }
+    
     // Use real AI analysis with OpenAI Vision API
     const analysis = await analyzePhysiqueWithAI(frontPhoto, backPhoto, onboardingData || {});
     
@@ -1038,35 +1603,54 @@ app.post('/api/scan/analyze', async (req, res) => {
         { upsert: true }
       );
       
-      // ALSO generate AI-powered weekly training plan based on scan analysis
-      console.log(`[SCAN] Generating AI training plan for user ${userId}...`);
-      try {
-        const scanAnalysisData = {
-          mogScore: analysis.mogScore,
-          tier: analysis.tier,
-          muscleBreakdown: analysis.muscleBreakdown,
-          weakPoints: analysis.weakPoints || [],
-          strongPoints: analysis.strongPoints || [],
-          symmetry: analysis.symmetry,
-          overallAssessment: analysis.overallAssessment,
-          improvementTips: analysis.improvementTips || [],
-        };
-        
-        const aiTrainingPlan = await generateAITrainingPlan(scanAnalysisData);
-        
-        // Save to user's profile
-        const userToUpdate = await User.findOne({ 
-          $or: [{ tempId: userId }, { userId: userId }]
-        });
-        if (userToUpdate) {
-          userToUpdate.weeklyTrainingPlan = aiTrainingPlan;
-          await userToUpdate.save();
-          console.log(`[SCAN] AI training plan saved for user ${userId}`);
+      // Generate AI training plan in BACKGROUND (don't block the response)
+      // This significantly speeds up scan time from 2min to ~30-40sec
+      console.log(`[SCAN] Queuing AI training plan generation for user ${userId} (background)...`);
+      setImmediate(async () => {
+        try {
+          const scanAnalysisData = {
+            mogScore: analysis.mogScore,
+            tier: analysis.tier,
+            muscleBreakdown: analysis.muscleBreakdown,
+            weakPoints: analysis.weakPoints || [],
+            strongPoints: analysis.strongPoints || [],
+            symmetry: analysis.symmetry,
+            overallAssessment: analysis.overallAssessment,
+            improvementTips: analysis.improvementTips || [],
+          };
+          
+          const aiTrainingPlan = await generateAITrainingPlan(scanAnalysisData);
+          
+          // Save to WorkoutPlan collection (for /api/training/:userId/weekly endpoint)
+          await WorkoutPlan.findOneAndUpdate(
+            { userId },
+            { 
+              userId,
+              weeklyPlan: aiTrainingPlan.days,
+              weekId: aiTrainingPlan.weekId,
+              mission: aiTrainingPlan.mission,
+              targets: aiTrainingPlan.targets || [],
+              expectedGain: aiTrainingPlan.expectedGain || 1.0,
+              currentWeek: 1,
+              updatedAt: new Date()
+            },
+            { upsert: true }
+          );
+          console.log(`[SCAN-BG] AI training plan saved to WorkoutPlan for user ${userId}`);
+          
+          // Save to user's profile
+          const userToUpdate = await User.findOne({ 
+            $or: [{ tempId: userId }, { userId: userId }]
+          });
+          if (userToUpdate) {
+            userToUpdate.weeklyTrainingPlan = aiTrainingPlan;
+            await userToUpdate.save();
+            console.log(`[SCAN-BG] AI training plan saved to User profile for ${userId}`);
+          }
+        } catch (trainingError) {
+          console.error(`[SCAN-BG] Failed to generate AI training plan:`, trainingError.message);
         }
-      } catch (trainingError) {
-        console.error(`[SCAN] Failed to generate AI training plan:`, trainingError.message);
-        // Don't fail the scan if training plan generation fails
-      }
+      });
     }
     
     console.log(`[SCAN] ${userId || 'anonymous'}: Score=${analysis.mogScore}, Tier=${analysis.tier}, AI=${analysis.aiPowered ? 'Yes' : 'No'}`);
@@ -1121,12 +1705,160 @@ app.post('/api/workout/complete-exercise', async (req, res) => {
 
 // ----- WEEKLY TRAINING PLAN -----
 
+// Track users currently regenerating plans (prevent duplicate regenerations)
+const regeneratingPlans = new Map(); // userId -> timestamp
+
 // Get user's weekly training plan
 app.get('/api/training/:userId/weekly', async (req, res) => {
   const { userId } = req.params;
   console.log(`[TRAINING] Getting weekly plan for user ${userId}`);
   
   try {
+    // Helper to check if plan is complete
+    // Plan is complete if it has at least 3 days (minimum valid plan) and all exercises have steps
+    const isPlanComplete = (days) => {
+      if (!days || days.length < 3) return false;
+      for (const day of days) {
+        if (!day.exercises || day.exercises.length === 0) return false;
+        for (const ex of day.exercises) {
+          if (!ex.steps || ex.steps.length < 2) return false;
+        }
+      }
+      return true;
+    };
+    
+    // Check if already regenerating for this user
+    const isRegenerating = regeneratingPlans.has(userId);
+    if (isRegenerating) {
+      const startTime = regeneratingPlans.get(userId);
+      const elapsed = Date.now() - startTime;
+      console.log(`[TRAINING] Already regenerating for user ${userId} (${Math.round(elapsed/1000)}s elapsed)`);
+      
+      // If it's been more than 2 minutes, clear the flag (timeout)
+      if (elapsed > 120000) {
+        regeneratingPlans.delete(userId);
+      } else {
+        // Return a "regenerating" status so frontend shows loader
+        return res.json({ 
+          success: true, 
+          regenerating: true,
+          message: 'Plan is being regenerated, please wait...'
+        });
+      }
+    }
+
+    // First check WorkoutPlan collection (used by complete-day for progressive plans)
+    const workoutPlan = await WorkoutPlan.findOne({ userId });
+    if (workoutPlan && workoutPlan.weeklyPlan && workoutPlan.weeklyPlan.length > 0) {
+      // Check if plan is complete (6 days with exercises and steps)
+      const isComplete = isPlanComplete(workoutPlan.weeklyPlan);
+      
+      if (!isComplete) {
+        console.log(`[TRAINING] Plan incomplete (${workoutPlan.weeklyPlan.length} days), regenerating...`);
+        
+        // Mark as regenerating to prevent duplicate requests
+        regeneratingPlans.set(userId, Date.now());
+        
+        // Get user's scan data for regeneration - check both User and Scan collections
+        const user = await User.findOne({ 
+          $or: [{ tempId: userId }, { userId: userId }]
+        });
+        
+        // Also check Scan collection for latest scan
+        const latestScan = await Scan.findOne({ userId }).sort({ createdAt: -1 });
+        const scanData = user?.latestScan || latestScan;
+        
+        if (scanData) {
+          try {
+            // Regenerate the plan
+            const newPlan = await generateAITrainingPlan(scanData);
+            
+            // Save the new plan
+            workoutPlan.weeklyPlan = newPlan.days;
+            workoutPlan.weekId = newPlan.weekId;
+            workoutPlan.mission = newPlan.mission;
+            workoutPlan.targets = newPlan.targets;
+            workoutPlan.expectedGain = newPlan.expectedGain;
+            await workoutPlan.save();
+            
+            // Also save to user if exists
+            if (user) {
+              user.weeklyTrainingPlan = newPlan;
+              await user.save();
+            }
+            
+            // Clear regenerating flag
+            regeneratingPlans.delete(userId);
+            
+            console.log(`[TRAINING] Regenerated complete plan with ${newPlan.days.length} days`);
+            return res.json({ 
+              success: true, 
+              plan: newPlan 
+            });
+          } catch (regenErr) {
+            console.error('[TRAINING] Regeneration failed:', regenErr.message);
+            // Clear regenerating flag on error
+            regeneratingPlans.delete(userId);
+            // Fall through to return incomplete plan
+          }
+        } else {
+          console.log('[TRAINING] No scan data found for regeneration, returning current plan');
+          // No scan data, clear flag and return current plan (don't loop)
+          regeneratingPlans.delete(userId);
+        }
+      }
+      
+      // Default exercise step templates for incomplete plans
+      const defaultSteps = [
+        { stepNumber: 1, title: 'Set 1 - Warm Up', description: 'Start light and focus on form', duration: 60 },
+        { stepNumber: 2, title: 'Set 2 - Build Up', description: 'Increase weight, maintain control', duration: 60 },
+        { stepNumber: 3, title: 'Set 3 - Working Set', description: 'Push yourself, feel the burn', duration: 60 },
+        { stepNumber: 4, title: 'Set 4 - Final Set', description: 'Give it everything you have!', duration: 60 },
+      ];
+      
+      // Convert WorkoutPlan format to WeeklyTrainingPlan format
+      const plan = {
+        weekId: workoutPlan.weekId || `week-${workoutPlan.currentWeek || 1}`,
+        mission: workoutPlan.mission || 'Complete your training program',
+        expectedGain: workoutPlan.expectedGain || 1.0,
+        targets: workoutPlan.targets || [],
+        days: workoutPlan.weeklyPlan.map(day => ({
+          day: day.day,
+          title: day.title,
+          description: day.description || '',
+          type: day.type || 'Strength',
+          typeColor: day.typeColor || '#4A7CFF',
+          secondaryType: day.secondaryType || null,
+          status: day.status || 'upcoming',
+          duration: day.duration || '45 min',
+          caloriesBurn: day.caloriesBurn || 300,
+          targetMuscles: day.targetMuscles || [],
+          exercises: (day.exercises || []).map(ex => ({
+            id: ex.id,
+            name: ex.name,
+            sets: ex.sets,
+            note: ex.note || 'Focus on proper form',
+            badge: ex.badge || null,
+            badgeColor: ex.badgeColor || null,
+            borderColor: ex.borderColor || '#3A2A4A',
+            completed: ex.completed || false,
+            // Add default steps if missing
+            steps: (ex.steps && ex.steps.length >= 2) ? ex.steps : defaultSteps,
+          })),
+          completedAt: day.completedAt,
+        })),
+        currentWeek: workoutPlan.currentWeek || 1,
+        weekNumber: workoutPlan.currentWeek || 1, // Also include weekNumber for frontend compatibility
+      };
+      console.log(`[TRAINING] Returning workout plan - Week: ${plan.currentWeek}, Days: ${plan.days.length}, WeekId: ${plan.weekId}`);
+      console.log(`[TRAINING] Day statuses: ${plan.days.map(d => d.status).join(', ')}`);
+      return res.json({ 
+        success: true, 
+        plan 
+      });
+    }
+
+    // Fallback to user's weeklyTrainingPlan field
     const user = await User.findOne({ 
       $or: [{ tempId: userId }, { userId: userId }]
     });
@@ -1137,15 +1869,80 @@ app.get('/api/training/:userId/weekly', async (req, res) => {
     
     // Check if user has a weekly training plan
     if (user.weeklyTrainingPlan) {
-      console.log(`[TRAINING] Found weekly plan: ${user.weeklyTrainingPlan.weekId}`);
+      // Check if it's complete
+      const isComplete = isPlanComplete(user.weeklyTrainingPlan.days);
+      
+      if (!isComplete && user.latestScan) {
+        console.log(`[TRAINING] User plan incomplete, regenerating...`);
+        try {
+          const newPlan = await generateAITrainingPlan(user.latestScan);
+          user.weeklyTrainingPlan = newPlan;
+          await user.save();
+          
+          console.log(`[TRAINING] Regenerated complete plan with ${newPlan.days.length} days`);
+          return res.json({ 
+            success: true, 
+            plan: newPlan 
+          });
+        } catch (regenErr) {
+          console.error('[TRAINING] Regeneration failed:', regenErr.message);
+        }
+      }
+      
+      console.log(`[TRAINING] Found user weekly plan: ${user.weeklyTrainingPlan.weekId}`);
       return res.json({ 
         success: true, 
         plan: user.weeklyTrainingPlan 
       });
     }
     
-    console.log(`[TRAINING] No weekly plan found for user ${userId}`);
-    return res.json({ success: false, message: 'No plan found' });
+    // No plan exists - try to generate one if user has scan data
+    if (user.latestScan) {
+      console.log(`[TRAINING] No plan found, but user has scan data - generating new plan...`);
+      
+      // Mark as regenerating to prevent duplicate requests
+      regeneratingPlans.set(userId, Date.now());
+      
+      try {
+        const newPlan = await generateAITrainingPlan(user.latestScan);
+        
+        // Save to WorkoutPlan collection (including targets and expectedGain)
+        await WorkoutPlan.findOneAndUpdate(
+          { userId },
+          { 
+            userId,
+            weeklyPlan: newPlan.days,
+            weekId: newPlan.weekId,
+            mission: newPlan.mission,
+            targets: newPlan.targets || [],
+            expectedGain: newPlan.expectedGain || 1.0,
+            currentWeek: 1,
+            updatedAt: new Date()
+          },
+          { upsert: true, new: true }
+        );
+        
+        // Also save to user
+        user.weeklyTrainingPlan = newPlan;
+        await user.save();
+        
+        // Clear regenerating flag
+        regeneratingPlans.delete(userId);
+        
+        console.log(`[TRAINING] ✅ Generated new plan with ${newPlan.days.length} days`);
+        return res.json({ 
+          success: true, 
+          plan: newPlan 
+        });
+      } catch (genErr) {
+        console.error('[TRAINING] Plan generation failed:', genErr.message);
+        regeneratingPlans.delete(userId);
+        return res.json({ success: false, message: 'Failed to generate plan', error: genErr.message });
+      }
+    }
+    
+    console.log(`[TRAINING] No weekly plan found for user ${userId} and no scan data`);
+    return res.json({ success: false, message: 'No plan found - please complete a scan first' });
     
   } catch (err) {
     console.error('[TRAINING] Get weekly plan failed:', err);
@@ -1168,9 +1965,37 @@ app.post('/api/training/:userId/weekly', async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    // Save the weekly training plan
+    // SAFEGUARD: Don't allow overwriting a newer week with an older one
+    const existingPlan = await WorkoutPlan.findOne({ userId });
+    const incomingWeek = plan?.currentWeek || plan?.weekNumber || 1;
+    const existingWeek = existingPlan?.currentWeek || 1;
+    
+    if (existingPlan && existingWeek > incomingWeek) {
+      console.log(`[TRAINING] ⚠️ Blocked overwrite: existing week ${existingWeek} > incoming week ${incomingWeek}`);
+      return res.json({ 
+        success: true, 
+        message: 'Ignored - newer week already exists',
+        currentWeek: existingWeek 
+      });
+    }
+    
+    // Save the weekly training plan to User
     user.weeklyTrainingPlan = plan;
     await user.save();
+    
+    // Also sync to WorkoutPlan collection for consistency
+    await WorkoutPlan.findOneAndUpdate(
+      { userId },
+      {
+        userId,
+        weekId: plan.weekId,
+        mission: plan.mission,
+        weeklyPlan: plan.days,
+        currentWeek: plan.currentWeek || 1,
+        updatedAt: new Date(),
+      },
+      { upsert: true, new: true }
+    );
     
     console.log(`[TRAINING] Weekly plan saved successfully for user ${userId}`);
     return res.json({ success: true, message: 'Plan saved' });
@@ -1273,6 +2098,21 @@ app.post('/api/training/:userId/generate', async (req, res) => {
     user.latestScan = scanData;
     await user.save();
     
+    // Also save to WorkoutPlan collection for consistency
+    await WorkoutPlan.findOneAndUpdate(
+      { userId },
+      {
+        userId,
+        weekId: trainingPlan.weekId,
+        mission: trainingPlan.mission,
+        weeklyPlan: trainingPlan.days,
+        currentWeek: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      { upsert: true, new: true }
+    );
+    
     console.log(`[AI TRAINING] Plan generated and saved for user ${userId}`);
     
     res.json({ 
@@ -1344,24 +2184,47 @@ OUTPUT (JSON only):
 Generate 6 days. Day 1 = "today", others = "upcoming".`;
 
   try {
-    console.log('[AI TRAINING] Calling OpenAI API (gpt-4o-mini for speed)...');
+    console.log('[AI TRAINING] Calling OpenAI API (gpt-4o)...');
     const startTime = Date.now();
     
+    // Using gpt-4o for training plan generation - it's reliable and fast
+    // GPT-5 uses reasoning tokens internally and often returns empty content
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', // Faster model
+      model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: 'Generate my 6-day training plan. JSON only.' }
       ],
-      temperature: 0.6,
-      max_tokens: 4000, // Reduced for faster response
+      temperature: 0.7,
+      max_tokens: 4000,
     });
     
     const elapsed = Date.now() - startTime;
     console.log(`[AI TRAINING] OpenAI response received in ${elapsed}ms`);
 
-    let planText = response.choices[0].message.content.trim();
+    // Check for valid response
+    if (!response.choices || !response.choices[0] || !response.choices[0].message) {
+      console.error('[AI TRAINING] Invalid response structure:', JSON.stringify(response).slice(0, 500));
+      throw new Error('Invalid response from OpenAI API');
+    }
+
+    // Check finish reason
+    const finishReason = response.choices[0].finish_reason;
+    console.log('[AI TRAINING] Finish reason:', finishReason);
+    
+    if (finishReason === 'length') {
+      console.warn('[AI TRAINING] Response was truncated due to token limit');
+    }
+
+    let planText = (response.choices[0].message.content || '').trim();
     console.log('[AI TRAINING] Plan text length:', planText.length);
+    
+    // Handle empty response
+    if (!planText || planText.length === 0) {
+      console.error('[AI TRAINING] Empty response from API');
+      console.log('[AI TRAINING] Full response:', JSON.stringify(response).slice(0, 1000));
+      throw new Error('Empty response from OpenAI API - model may have refused or timed out');
+    }
     
     // Remove markdown code blocks if present
     if (planText.startsWith('```')) {
@@ -1369,9 +2232,17 @@ Generate 6 days. Day 1 = "today", others = "upcoming".`;
       console.log('[AI TRAINING] Removed markdown, new length:', planText.length);
     }
     
+    // Log first 500 chars for debugging
+    console.log('[AI TRAINING] Plan preview:', planText.slice(0, 500));
+    
     console.log('[AI TRAINING] Parsing JSON...');
     const plan = JSON.parse(planText);
     console.log('[AI TRAINING] JSON parsed successfully, days:', plan.days?.length);
+    
+    // Validate we have all 6 days
+    if (!plan.days || plan.days.length < 6) {
+      console.warn(`[AI TRAINING] Only ${plan.days?.length || 0} days generated, expected 6`);
+    }
     
     // Ensure proper timestamps
     const now = new Date();
@@ -1379,36 +2250,526 @@ Generate 6 days. Day 1 = "today", others = "upcoming".`;
     plan.startDate = now.toISOString();
     plan.endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
     plan.generatedAt = now.toISOString();
+    plan.mission = plan.mission || 'Transform your physique';
+    plan.expectedGain = plan.expectedGain || 1.0;
+    
+    // Default exercise step templates
+    const defaultSteps = [
+      { stepNumber: 1, title: 'Set 1 - Warm Up', description: 'Start light and focus on form', duration: 60 },
+      { stepNumber: 2, title: 'Set 2 - Build Up', description: 'Increase weight, maintain control', duration: 60 },
+      { stepNumber: 3, title: 'Set 3 - Working Set', description: 'Push yourself, feel the burn', duration: 60 },
+      { stepNumber: 4, title: 'Set 4 - Final Set', description: 'Give it everything you have!', duration: 60 },
+    ];
     
     // Ensure all days have proper structure
-    plan.days = plan.days.map((day, index) => ({
-      ...day,
+    plan.days = (plan.days || []).map((day, index) => ({
       day: index + 1,
+      title: day.title || `Training Day ${index + 1}`,
+      description: day.description || '',
+      type: day.type || 'Strength',
+      typeColor: day.typeColor || '#4A7CFF',
       status: index === 0 ? 'today' : 'upcoming',
-      exercises: day.exercises.map(ex => ({
-        ...ex,
+      duration: day.duration || '45 min',
+      caloriesBurn: day.caloriesBurn || 300,
+      targetMuscles: day.targetMuscles || [],
+      exercises: (day.exercises || []).map((ex, exIndex) => ({
+        id: ex.id || `ex-${index + 1}-${exIndex + 1}`,
+        name: ex.name || `Exercise ${exIndex + 1}`,
+        sets: ex.sets || '4 x 10',
+        note: ex.note || 'Focus on proper form',
+        badge: ex.badge || null,
+        badgeColor: ex.badgeColor || null,
         borderColor: ex.borderColor || '#3A2A4A',
-        steps: (ex.steps || []).map(step => ({
-          ...step,
-          duration: Math.max(60, step.duration || 60) // Ensure minimum 60 seconds
-        }))
+        completed: false,
+        steps: (ex.steps && ex.steps.length >= 3) ? ex.steps.map((step, stepIndex) => ({
+          stepNumber: stepIndex + 1,
+          title: step.title || `Set ${stepIndex + 1}`,
+          description: step.description || 'Complete this set with good form',
+          duration: Math.max(60, step.duration || 60)
+        })) : defaultSteps.slice(0, 4) // Use default steps if missing or incomplete
       }))
     }));
     
     console.log(`[AI TRAINING] Generated plan with ${plan.days.length} days, mission: ${plan.mission}`);
+    
+    // Log exercise counts per day for debugging
+    plan.days.forEach(day => {
+      console.log(`[AI TRAINING] Day ${day.day}: ${day.exercises.length} exercises, ${day.exercises.map(e => e.steps?.length || 0).join('/')} steps each`);
+    });
     
     return plan;
     
   } catch (error) {
     console.error('[AI TRAINING] OpenAI API error:', error.message);
     console.error('[AI TRAINING] Full error:', error);
+    
+    // If GPT-5 fails, try falling back to GPT-4o
+    console.log('[AI TRAINING] Attempting fallback to gpt-4o...');
+    try {
+      const fallbackResponse = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: 'Generate my 6-day training plan. JSON only.' }
+        ],
+        max_tokens: 4000,
+        temperature: 0.7,
+      });
+      
+      let fallbackText = (fallbackResponse.choices[0]?.message?.content || '').trim();
+      if (fallbackText.startsWith('```')) {
+        fallbackText = fallbackText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+      }
+      
+      if (fallbackText && fallbackText.length > 0) {
+        console.log('[AI TRAINING] Fallback successful, parsing...');
+        const fallbackPlan = JSON.parse(fallbackText);
+        
+        // Add required fields
+        const now = new Date();
+        fallbackPlan.weekId = `week-${now.getTime()}`;
+        fallbackPlan.generatedAt = now.toISOString();
+        fallbackPlan.days = (fallbackPlan.days || []).map((day, index) => ({
+          ...day,
+          day: index + 1,
+          status: index === 0 ? 'today' : 'upcoming',
+        }));
+        
+        return fallbackPlan;
+      }
+    } catch (fallbackError) {
+      console.error('[AI TRAINING] Fallback also failed:', fallbackError.message);
+    }
+    
     throw new Error('Failed to generate AI training plan: ' + error.message);
+  }
+}
+
+// Generate next week's plan with progressive overload based on user's history
+async function generateNextWeekPlan(user, currentPlan) {
+  console.log('[AI TRAINING] Generating progressive Week', (currentPlan.currentWeek || 1) + 1);
+  
+  if (!openai) {
+    throw new Error('OpenAI client not initialized');
+  }
+  
+  // Get user's latest scan data with image
+  const latestScan = await Scan.findOne({ 
+    $or: [{ userId: user?.userId }, { userId: user?.tempId }, { tempId: user?.tempId }] 
+  }).sort({ createdAt: -1 });
+  
+  // Use user's latestScan as fallback if no Scan document found
+  const scanData = latestScan || user?.latestScan;
+  
+  // Get the physique image URL if available
+  const physiqueImageUrl = latestScan?.imageUrls?.[0] || latestScan?.frontImage || null;
+  
+  console.log('[AI TRAINING] User mog score:', user?.mogScore);
+  console.log('[AI TRAINING] Has physique image:', !!physiqueImageUrl);
+  
+  // Compile workout history for progressive overload
+  const completedHistory = currentPlan.completedHistory || [];
+  const lastWeekWorkouts = currentPlan.weeklyPlan || [];
+  
+  // Calculate what muscles were trained and how
+  const muscleWorkVolume = {};
+  lastWeekWorkouts.forEach(day => {
+    (day.targetMuscles || []).forEach(muscle => {
+      muscleWorkVolume[muscle] = (muscleWorkVolume[muscle] || 0) + 1;
+    });
+  });
+  
+  const systemPrompt = `You are an elite AI personal trainer creating Week ${(currentPlan.currentWeek || 1) + 1} of a progressive training program.
+
+${physiqueImageUrl ? 'IMPORTANT: I have attached the user\'s current physique photo. Analyze their body composition, muscle development, and areas that need work. Use this visual assessment to tailor the training plan.' : ''}
+
+USER PROFILE:
+- Current Mog Score: ${user?.mogScore || 50}/100
+- Total Workouts Completed: ${user?.totalWorkouts || 0}
+- Week Just Completed: ${currentPlan.currentWeek || 1}
+- Tier: ${scanData?.tier || 'Unknown'}
+- Weak Points: ${scanData?.weakPoints?.join(', ') || 'Not identified'}
+- Strong Points: ${scanData?.strongPoints?.join(', ') || 'Not identified'}
+- Muscle Breakdown: ${scanData?.muscleBreakdown ? JSON.stringify(scanData.muscleBreakdown) : 'Not available'}
+
+LAST WEEK'S TRAINING (completed):
+${lastWeekWorkouts.map(d => `- Day ${d.day}: ${d.title} - ${d.targetMuscles?.join(', ')}`).join('\n')}
+
+PROGRESSIVE OVERLOAD RULES:
+1. Increase intensity compared to last week (more sets, reps, or harder variations)
+2. Focus MORE on weak points identified in the scan${physiqueImageUrl ? ' and visible in the photo' : ''}
+3. Keep training strong points to maintain them
+4. Vary exercises from last week to prevent adaptation
+5. Push the user harder - they completed the previous week, so they're ready
+6. Include at least one more challenging exercise per day than last week
+7. Based on the Mog Score of ${user?.mogScore || 50}, adjust difficulty appropriately
+
+RESPOND WITH JSON ONLY - NO EXPLANATIONS:
+{
+  "mission": "Week ${(currentPlan.currentWeek || 1) + 1} progressive mission statement",
+  "days": [
+    {
+      "day": 1,
+      "title": "Day Title",
+      "subtitle": "Target areas",
+      "targetMuscles": ["muscle1", "muscle2"],
+      "duration": 45,
+      "exercises": [
+        {
+          "id": "unique-id",
+          "name": "Exercise Name",
+          "sets": "4 × 8-10",
+          "note": "Form cue",
+          "duration": 45,
+          "restTime": 60,
+          "steps": [
+            {"title": "Setup", "description": "How to position", "duration": 90},
+            {"title": "Execution", "description": "How to perform", "duration": 90},
+            {"title": "Peak", "description": "Hold/squeeze point", "duration": 90}
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+Generate 6 days. Day 1 = "today", others = "upcoming". Make it HARDER than last week.`;
+
+  try {
+    console.log('[AI TRAINING] Calling GPT-5 for Week', (currentPlan.currentWeek || 1) + 1);
+    
+    // Build the message content - include image if available
+    const userContent = physiqueImageUrl 
+      ? [
+          { type: 'text', text: `Generate Week ${(currentPlan.currentWeek || 1) + 1} training plan with progressive overload based on my current physique. JSON only.` },
+          { type: 'image_url', image_url: { url: physiqueImageUrl, detail: 'high' } }
+        ]
+      : `Generate Week ${(currentPlan.currentWeek || 1) + 1} training plan with progressive overload. JSON only.`;
+    
+    // Using gpt-4o for training plan generation - it's reliable and supports vision
+    // GPT-5 uses reasoning tokens internally and often returns empty content
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      temperature: 0.7,
+      max_tokens: 4000,
+    });
+    
+    let planText = (response.choices[0]?.message?.content || '').trim();
+    
+    // Handle empty response
+    if (!planText || planText.length === 0) {
+      throw new Error('Empty response from API');
+    }
+    
+    // Clean up JSON
+    if (planText.startsWith('```json')) planText = planText.slice(7);
+    if (planText.startsWith('```')) planText = planText.slice(3);
+    if (planText.endsWith('```')) planText = planText.slice(0, -3);
+    planText = planText.trim();
+    
+    const plan = JSON.parse(planText);
+    
+    // Validate we have all 6 days
+    if (!plan.days || plan.days.length < 6) {
+      console.warn(`[AI TRAINING] Week ${(currentPlan.currentWeek || 1) + 1}: Only ${plan.days?.length || 0} days generated, expected 6`);
+    }
+    
+    // Default exercise step templates
+    const defaultSteps = [
+      { stepNumber: 1, title: 'Set 1 - Warm Up', description: 'Start light and focus on form', duration: 60 },
+      { stepNumber: 2, title: 'Set 2 - Build Up', description: 'Increase weight, maintain control', duration: 60 },
+      { stepNumber: 3, title: 'Set 3 - Working Set', description: 'Push yourself, feel the burn', duration: 60 },
+      { stepNumber: 4, title: 'Set 4 - Final Set', description: 'Give it everything you have!', duration: 60 },
+    ];
+    
+    // Format days properly with all required fields
+    const formattedDays = (plan.days || []).map((day, index) => ({
+      day: index + 1,
+      title: day.title || `Training Day ${index + 1}`,
+      description: day.description || '',
+      type: day.type || 'Strength',
+      typeColor: day.typeColor || '#4A7CFF',
+      status: index === 0 ? 'today' : 'upcoming',
+      duration: day.duration || '45 min',
+      caloriesBurn: day.caloriesBurn || 300,
+      targetMuscles: day.targetMuscles || [],
+      completed: false,
+      exercises: (day.exercises || []).map((ex, exIndex) => ({
+        id: ex.id || `ex-${index + 1}-${exIndex + 1}`,
+        name: ex.name || `Exercise ${exIndex + 1}`,
+        sets: ex.sets || '4 x 10',
+        note: ex.note || 'Focus on proper form',
+        badge: ex.badge || null,
+        badgeColor: ex.badgeColor || null,
+        borderColor: ex.borderColor || '#3A2A4A',
+        completed: false,
+        steps: (ex.steps && ex.steps.length >= 3) ? ex.steps.map((step, stepIndex) => ({
+          stepNumber: stepIndex + 1,
+          title: step.title || `Set ${stepIndex + 1}`,
+          description: step.description || 'Complete this set with good form',
+          duration: Math.max(60, step.duration || 60)
+        })) : defaultSteps.slice(0, 4) // Use default steps if missing or incomplete
+      }))
+    }));
+    
+    console.log(`[AI TRAINING] Week ${(currentPlan.currentWeek || 1) + 1} generated with ${formattedDays.length} days`);
+    
+    // Log exercise counts per day for debugging
+    formattedDays.forEach(day => {
+      console.log(`[AI TRAINING] Day ${day.day}: ${day.exercises.length} exercises, ${day.exercises.map(e => e.steps?.length || 0).join('/')} steps each`);
+    });
+    
+    return formattedDays;
+    
+  } catch (error) {
+    console.error('[AI TRAINING] Progressive week generation failed:', error.message);
+    
+    // Fallback to gpt-4o if gpt-5 fails
+    console.log('[AI TRAINING] Attempting fallback to gpt-4o for week generation...');
+    try {
+      const fallbackResponse = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Generate Week ${(currentPlan.currentWeek || 1) + 1} training plan. JSON only.` }
+        ],
+        max_tokens: 4000,
+        temperature: 0.7,
+      });
+      
+      let fallbackText = (fallbackResponse.choices[0]?.message?.content || '').trim();
+      if (fallbackText.startsWith('```')) {
+        fallbackText = fallbackText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+      }
+      
+      if (fallbackText && fallbackText.length > 0) {
+        const fallbackPlan = JSON.parse(fallbackText);
+        console.log('[AI TRAINING] Fallback week generation successful');
+        
+        return (fallbackPlan.days || []).map((day, index) => ({
+          day: index + 1,
+          title: day.title || `Training Day ${index + 1}`,
+          type: day.type || 'Strength',
+          typeColor: day.typeColor || '#4A7CFF',
+          status: index === 0 ? 'today' : 'upcoming',
+          targetMuscles: day.targetMuscles || [],
+          completed: false,
+          exercises: (day.exercises || []).map((ex, exIndex) => ({
+            id: `ex-${index + 1}-${exIndex + 1}`,
+            name: ex.name || `Exercise ${exIndex + 1}`,
+            sets: ex.sets || '4 x 10',
+            note: ex.note || 'Focus on form',
+            steps: [
+              { stepNumber: 1, title: 'Set 1', description: 'Warm up set', duration: 60 },
+              { stepNumber: 2, title: 'Set 2', description: 'Build up', duration: 60 },
+              { stepNumber: 3, title: 'Set 3', description: 'Working set', duration: 60 },
+              { stepNumber: 4, title: 'Set 4', description: 'Final push', duration: 60 },
+            ]
+          }))
+        }));
+      }
+    } catch (fallbackError) {
+      console.error('[AI TRAINING] Fallback week generation also failed:', fallbackError.message);
+    }
+    
+    throw error;
   }
 }
 
 // ----- TRAINING SESSION -----
 
-// Complete a training day
+// Complete a training day (with userId in path - matches frontend)
+app.post('/api/training/:userId/complete-day', async (req, res) => {
+  const userId = req.params.userId;
+  const { weekId, dayNumber, targetMuscles, exerciseCount, formScore } = req.body;
+  console.log(`[TRAINING] 📝 Completing day ${dayNumber} for user ${userId}`);
+  console.log(`[TRAINING] Request body:`, JSON.stringify({ weekId, dayNumber, targetMuscles, exerciseCount, formScore }));
+  
+  try {
+    // Find the workout plan
+    let plan = await WorkoutPlan.findOne({ userId });
+    
+    // If no plan exists, try to create one from user's scan data
+    if (!plan) {
+      console.log(`[TRAINING] ⚠️ No workout plan found, checking for user scan data...`);
+      
+      const user = await User.findOne({ 
+        $or: [{ tempId: userId }, { userId: userId }]
+      });
+      
+      if (user && user.latestScan) {
+        console.log(`[TRAINING] Found scan data, generating new plan...`);
+        try {
+          const newPlan = await generateAITrainingPlan(user.latestScan);
+          
+          // Save to WorkoutPlan collection
+          plan = await WorkoutPlan.findOneAndUpdate(
+            { userId },
+            { 
+              userId,
+              weeklyPlan: newPlan.days,
+              weekId: newPlan.weekId,
+              mission: newPlan.mission,
+              currentWeek: 1,
+              updatedAt: new Date()
+            },
+            { upsert: true, new: true }
+          );
+          
+          // Also save to user
+          user.weeklyTrainingPlan = newPlan;
+          await user.save();
+          
+          console.log(`[TRAINING] ✅ Created new plan with ${newPlan.days.length} days`);
+        } catch (genErr) {
+          console.error(`[TRAINING] ❌ Failed to generate plan:`, genErr.message);
+          return res.status(500).json({ success: false, message: 'Failed to generate workout plan', error: genErr.message });
+        }
+      } else {
+        console.log(`[TRAINING] ❌ No workout plan and no scan data for user ${userId}`);
+        return res.status(404).json({ success: false, message: 'No workout plan found - please complete a scan first' });
+      }
+    }
+    
+    console.log(`[TRAINING] Current plan state - Week: ${plan.currentWeek}, Days: ${plan.weeklyPlan?.length}`);
+    console.log(`[TRAINING] Day statuses BEFORE update:`, plan.weeklyPlan?.map(d => ({ day: d.day, status: d.status })));
+    
+    // Find and update the day status
+    const dayIndex = plan.weeklyPlan.findIndex(d => d.day === dayNumber);
+    if (dayIndex === -1) {
+      console.log(`[TRAINING] ❌ Day ${dayNumber} not found in plan`);
+      return res.status(404).json({ success: false, message: 'Day not found in plan' });
+    }
+    
+    // Mark day as completed
+    plan.weeklyPlan[dayIndex].status = 'done';
+    plan.weeklyPlan[dayIndex].completed = true;
+    plan.weeklyPlan[dayIndex].completedAt = new Date();
+    
+    // Update the next day's status to 'today' if it exists and is currently 'upcoming'
+    const nextDayIndex = plan.weeklyPlan.findIndex(d => d.day === dayNumber + 1);
+    if (nextDayIndex !== -1 && plan.weeklyPlan[nextDayIndex].status === 'upcoming') {
+      plan.weeklyPlan[nextDayIndex].status = 'today';
+      console.log(`[TRAINING] ✅ Advanced day ${dayNumber + 1} to 'today'`);
+    }
+    
+    console.log(`[TRAINING] ✅ Marked day ${dayNumber} as done`);
+    console.log(`[TRAINING] Day statuses AFTER update:`, plan.weeklyPlan?.map(d => ({ day: d.day, status: d.status })));
+    
+    // Mark all exercises as completed
+    if (plan.weeklyPlan[dayIndex].exercises) {
+      plan.weeklyPlan[dayIndex].exercises = plan.weeklyPlan[dayIndex].exercises.map(ex => ({
+        ...ex,
+        completed: true
+      }));
+    }
+    
+    // Store completed exercises in history for progressive overload tracking
+    if (!plan.completedHistory) plan.completedHistory = [];
+    plan.completedHistory.push({
+      weekNumber: plan.currentWeek || 1,
+      dayNumber,
+      completedAt: new Date(),
+      exercises: plan.weeklyPlan[dayIndex].exercises,
+      targetMuscles: plan.weeklyPlan[dayIndex].targetMuscles || targetMuscles || [],
+    });
+    
+    // IMPORTANT: Mark the nested array as modified so Mongoose saves the changes
+    plan.markModified('weeklyPlan');
+    plan.markModified('completedHistory');
+    
+    await plan.save();
+    console.log(`[TRAINING] 💾 Saved plan to database`);
+    
+    // Verify the save worked by re-fetching
+    const verifyPlan = await WorkoutPlan.findOne({ userId });
+    console.log(`[TRAINING] 🔍 VERIFIED - Day statuses in DB:`, verifyPlan?.weeklyPlan?.map(d => ({ day: d.day, status: d.status })));
+    
+    // Calculate mog points earned
+    const actualExerciseCount = exerciseCount || plan.weeklyPlan[dayIndex].exercises?.length || 3;
+    const mogPointsEarned = 0.2 + actualExerciseCount * 0.15;
+    
+    // Update user's mog score
+    const user = await User.findOne({ 
+      $or: [{ tempId: userId }, { userId: userId }]
+    });
+    
+    if (user) {
+      user.mogScore = (user.mogScore || 0) + mogPointsEarned;
+      user.totalWorkouts = (user.totalWorkouts || 0) + 1;
+      user.lastWorkoutDate = new Date();
+      await user.save();
+      
+      console.log(`[TRAINING] User ${userId} earned ${mogPointsEarned} mog points. Total: ${user.mogScore}`);
+    }
+    
+    // Check if all days are completed - generate next week if so
+    const daysStatuses = plan.weeklyPlan.map(d => d.status);
+    const allDaysCompleted = plan.weeklyPlan.every(d => d.status === 'done');
+    console.log(`[TRAINING] 🔍 Checking week completion - Day statuses: [${daysStatuses.join(', ')}]`);
+    console.log(`[TRAINING] 🔍 All days completed? ${allDaysCompleted}`);
+    
+    let newWeekGenerated = false;
+    let newWeekNumber = plan.currentWeek || 1;
+    
+    if (allDaysCompleted) {
+      console.log(`[TRAINING] 🎉 ALL DAYS COMPLETED! Generating next week (Week ${newWeekNumber + 1}) for user ${userId}`);
+      try {
+        // Generate next week with progressive overload
+        const nextWeek = await generateNextWeekPlan(user, plan);
+        console.log(`[TRAINING] generateNextWeekPlan returned ${nextWeek?.length || 0} days`);
+        if (nextWeek && nextWeek.length > 0) {
+          newWeekNumber = (plan.currentWeek || 1) + 1;
+          plan.currentWeek = newWeekNumber;
+          plan.weeklyPlan = nextWeek;
+          plan.weekId = `week-${newWeekNumber}-${Date.now()}`;
+          await plan.save();
+          console.log(`[TRAINING] 💾 Saved plan with week ${newWeekNumber} to database`);
+          
+          // Also sync to user.weeklyTrainingPlan
+          if (user) {
+            user.weeklyTrainingPlan = {
+              weekId: plan.weekId,
+              weekNumber: newWeekNumber,
+              mission: plan.mission || `Week ${newWeekNumber} - Continue your transformation`,
+              days: nextWeek,
+              currentWeek: newWeekNumber,
+            };
+            await user.save();
+          }
+          
+          newWeekGenerated = true;
+          console.log(`[TRAINING] ✅ Week ${newWeekNumber} generated successfully with ${nextWeek.length} days`);
+        } else {
+          console.log('[TRAINING] ⚠️ generateNextWeekPlan returned empty, keeping current week');
+        }
+      } catch (genErr) {
+        console.error('[TRAINING] ❌ Failed to generate next week:', genErr);
+      }
+    }
+    
+    res.json({
+      success: true,
+      dayCompleted: dayNumber,
+      mogPointsEarned,
+      newMogScore: user?.mogScore,
+      totalWorkouts: user?.totalWorkouts,
+      allDaysCompleted,
+      newWeekGenerated,
+      currentWeek: newWeekNumber,
+    });
+    
+  } catch (err) {
+    console.error('[TRAINING] Complete day failed:', err);
+    res.status(500).json({ success: false, message: 'Failed to complete day', error: err.message });
+  }
+});
+
+// Complete a training day (legacy endpoint without userId in path)
 app.post('/api/training/complete-day', async (req, res) => {
   const { userId, weekId, dayNumber } = req.body;
   console.log(`[TRAINING] Completing day ${dayNumber} for user ${userId}`);
@@ -1439,6 +2800,16 @@ app.post('/api/training/complete-day', async (req, res) => {
       }));
     }
     
+    // Store completed exercises in history for progressive overload tracking
+    if (!plan.completedHistory) plan.completedHistory = [];
+    plan.completedHistory.push({
+      weekNumber: plan.currentWeek || 1,
+      dayNumber,
+      completedAt: new Date(),
+      exercises: plan.weeklyPlan[dayIndex].exercises,
+      targetMuscles: plan.weeklyPlan[dayIndex].targetMuscles || [],
+    });
+    
     await plan.save();
     
     // Calculate mog points earned
@@ -1457,22 +2828,52 @@ app.post('/api/training/complete-day', async (req, res) => {
       await user.save();
       
       console.log(`[TRAINING] User ${userId} earned ${mogPointsEarned} mog points. Total: ${user.mogScore}`);
-      
-      // Return updated data
-      res.json({
-        success: true,
-        dayCompleted: dayNumber,
-        mogPointsEarned,
-        newMogScore: user.mogScore,
-        totalWorkouts: user.totalWorkouts,
-      });
-    } else {
-      res.json({
-        success: true,
-        dayCompleted: dayNumber,
-        mogPointsEarned,
-      });
     }
+    
+    // Check if all days are completed - generate next week if so
+    const allDaysCompleted = plan.weeklyPlan.every(d => d.status === 'done');
+    let newWeekGenerated = false;
+    
+    if (allDaysCompleted) {
+      console.log(`[TRAINING] All days completed! Generating next week for user ${userId}`);
+      try {
+        // Generate next week with progressive overload
+        const nextWeek = await generateNextWeekPlan(user, plan);
+        if (nextWeek) {
+          plan.currentWeek = (plan.currentWeek || 1) + 1;
+          plan.weeklyPlan = nextWeek;
+          plan.weekId = `week-${plan.currentWeek}-${Date.now()}`;
+          await plan.save();
+          
+          // Also sync to user.weeklyTrainingPlan
+          if (user) {
+            user.weeklyTrainingPlan = {
+              weekId: plan.weekId,
+              mission: plan.mission || 'Continue your transformation',
+              days: nextWeek,
+              currentWeek: plan.currentWeek,
+            };
+            await user.save();
+          }
+          
+          newWeekGenerated = true;
+          console.log(`[TRAINING] Week ${plan.currentWeek} generated successfully`);
+        }
+      } catch (genErr) {
+        console.error('[TRAINING] Failed to generate next week:', genErr);
+      }
+    }
+    
+    res.json({
+      success: true,
+      dayCompleted: dayNumber,
+      mogPointsEarned,
+      newMogScore: user?.mogScore,
+      totalWorkouts: user?.totalWorkouts,
+      allDaysCompleted,
+      newWeekGenerated,
+      currentWeek: plan.currentWeek || 1,
+    });
     
   } catch (err) {
     console.error('[TRAINING] Complete day failed:', err);
@@ -1521,25 +2922,151 @@ app.post('/api/training/start-session', async (req, res) => {
 
 // ----- EXERCISE IMAGE GENERATION (DALL-E) -----
 
-// Global rate limiter for DALL-E requests (5 images per minute limit)
-const imageGenerationQueue = {
-  lastRequestTime: 0,
-  isProcessing: false,
-  minDelayMs: 15000, // 15 seconds between exercises (3 images each, well under 5/min)
-};
+// In-memory cache for generated AI images (persists across requests during server lifetime)
+const aiImageCache = new Map();
 
-const waitForRateLimit = async () => {
-  const now = Date.now();
-  const timeSinceLastRequest = now - imageGenerationQueue.lastRequestTime;
+// Background generation queue
+const backgroundImageQueue = [];
+let isProcessingBackgroundQueue = false;
+
+// Generate AI image for a single exercise (background task)
+const generateAIImagesForExercise = async (exerciseName, exerciseId) => {
+  if (!OPENAI_API_KEY) return null;
   
-  if (timeSinceLastRequest < imageGenerationQueue.minDelayMs) {
-    const waitTime = imageGenerationQueue.minDelayMs - timeSinceLastRequest;
-    console.log(`[AI-IMAGE] Rate limit: waiting ${waitTime}ms before next exercise...`);
-    await new Promise(resolve => setTimeout(resolve, waitTime));
+  const cacheKey = exerciseName.toLowerCase().trim();
+  
+  // Check if already in cache
+  if (aiImageCache.has(cacheKey)) {
+    return aiImageCache.get(cacheKey);
   }
   
-  imageGenerationQueue.lastRequestTime = Date.now();
+  // Determine primary muscle group for highlighting
+  const name = exerciseName.toLowerCase();
+  let muscleGroup = 'full body';
+  let glowArea = 'entire form';
+  
+  if (name.includes('squat') || name.includes('leg') || name.includes('lunge') || name.includes('calf')) {
+    muscleGroup = 'leg muscles';
+    glowArea = 'thighs and calves';
+  } else if (name.includes('deadlift')) {
+    muscleGroup = 'back and leg muscles';
+    glowArea = 'lower back and hamstrings';
+  } else if (name.includes('press') || name.includes('push') || name.includes('chest') || name.includes('bench') || name.includes('fly')) {
+    muscleGroup = 'chest muscles';
+    glowArea = 'chest and front shoulders';
+  } else if (name.includes('row') || name.includes('pull') || name.includes('lat')) {
+    muscleGroup = 'back muscles';
+    glowArea = 'upper back and lats';
+  } else if (name.includes('curl') || name.includes('bicep')) {
+    muscleGroup = 'bicep muscles';
+    glowArea = 'front of upper arms';
+  } else if (name.includes('tricep') || name.includes('dip') || name.includes('extension')) {
+    muscleGroup = 'tricep muscles';
+    glowArea = 'back of upper arms';
+  } else if (name.includes('shoulder') || name.includes('delt') || name.includes('raise') || name.includes('shrug')) {
+    muscleGroup = 'shoulder muscles';
+    glowArea = 'shoulders and traps';
+  } else if (name.includes('crunch') || name.includes('plank') || name.includes('ab') || name.includes('core') || name.includes('twist')) {
+    muscleGroup = 'core muscles';
+    glowArea = 'abdominal region';
+  }
+  
+  const phases = [
+    { id: 'start', description: 'starting position' },
+    { id: 'middle', description: 'mid-movement' },
+    { id: 'end', description: 'peak contraction' }
+  ];
+  
+  const images = [];
+  
+  for (let i = 0; i < phases.length; i++) {
+    const phase = phases[i];
+    
+    try {
+      console.log(`[AI-IMAGE] Generating ${phase.id} for ${exerciseName}...`);
+      
+      // Use abstract robotic/mannequin style to avoid content filters
+      const prompt = `A sleek futuristic fitness robot mannequin demonstrating ${exerciseName} exercise in ${phase.description}. The robot has a metallic silver-gray frame with visible joint mechanisms. The ${glowArea} area is highlighted with bright neon orange and red LED lights showing muscle activation. Dark gym environment with dramatic lighting. High-tech fitness app style illustration. Professional, clean, modern design. No text.`;
+      
+      const response = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'dall-e-3',
+          prompt: prompt,
+          n: 1,
+          size: '1024x1024',
+          quality: 'standard',
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.data?.[0]?.url) {
+        images.push({ id: `${exerciseId}-${i + 1}`, url: data.data[0].url, phase: phase.id });
+        console.log(`[AI-IMAGE] ✅ Generated ${phase.id} for ${exerciseName}`);
+      } else {
+        console.error(`[AI-IMAGE] ❌ Failed ${phase.id} for ${exerciseName}:`, data.error?.message || JSON.stringify(data));
+        return null; // Failed, don't cache partial results
+      }
+      
+      // Rate limit: wait 20 seconds between images
+      if (i < phases.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 20000));
+      }
+    } catch (err) {
+      console.error(`[AI-IMAGE] Error generating ${phase.id} for ${exerciseName}:`, err.message);
+      return null;
+    }
+  }
+  
+  if (images.length === 3) {
+    // Cache the successful result
+    aiImageCache.set(cacheKey, images);
+    console.log(`[AI-IMAGE] ✅✅✅ Cached ${exerciseName} (${aiImageCache.size} exercises in cache)`);
+    return images;
+  }
+  
+  return null;
 };
+
+// Process background queue one at a time
+const processBackgroundQueue = async () => {
+  if (isProcessingBackgroundQueue || backgroundImageQueue.length === 0) return;
+  
+  isProcessingBackgroundQueue = true;
+  
+  while (backgroundImageQueue.length > 0) {
+    const { exerciseName, exerciseId } = backgroundImageQueue.shift();
+    const cacheKey = exerciseName.toLowerCase().trim();
+    
+    // Skip if already cached
+    if (aiImageCache.has(cacheKey)) continue;
+    
+    console.log(`[AI-IMAGE] Background: processing ${exerciseName} (${backgroundImageQueue.length} remaining)`);
+    await generateAIImagesForExercise(exerciseName, exerciseId);
+    
+    // Wait 30 seconds between exercises to avoid rate limits
+    if (backgroundImageQueue.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, 30000));
+    }
+  }
+  
+  isProcessingBackgroundQueue = false;
+  console.log(`[AI-IMAGE] Background queue complete. Total cached: ${aiImageCache.size}`);
+};
+
+// Endpoint to clear image cache (useful when updating prompts)
+app.post('/api/admin/clear-image-cache', async (req, res) => {
+  const cacheSize = aiImageCache.size;
+  aiImageCache.clear();
+  backgroundImageQueue.length = 0;
+  console.log(`[AI-IMAGE] Cache cleared! Was ${cacheSize} items.`);
+  res.json({ success: true, message: `Cleared ${cacheSize} cached images`, queueCleared: true });
+});
 
 app.post('/api/workout/generate-exercise-image', async (req, res) => {
   const { exerciseName, exerciseId } = req.body;
@@ -1548,13 +3075,31 @@ app.post('/api/workout/generate-exercise-image', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Exercise name required' });
   }
   
-  // Use high-quality fitness stock images for instant loading
-  // Categorized by muscle group for relevant visuals
-  const getFitnessImages = (exName, exId) => {
-    const name = exName.toLowerCase();
+  const cacheKey = exerciseName.toLowerCase().trim();
+  
+  // Check in-memory cache first
+  if (aiImageCache.has(cacheKey)) {
+    console.log(`[AI-IMAGE] Cache hit for: ${exerciseName}`);
+    return res.json({ success: true, images: aiImageCache.get(cacheKey), source: 'ai-cached' });
+  }
+  
+  // Add to background queue for AI generation (if not already queued)
+  const alreadyQueued = backgroundImageQueue.some(q => q.exerciseName.toLowerCase().trim() === cacheKey);
+  if (OPENAI_API_KEY && !alreadyQueued) {
+    backgroundImageQueue.push({ exerciseName, exerciseId });
+    console.log(`[AI-IMAGE] Queued for background generation: ${exerciseName} (queue size: ${backgroundImageQueue.length})`);
+    
+    // Start processing if not already running
+    processBackgroundQueue().catch(err => console.error('[AI-IMAGE] Queue error:', err));
+  }
+  
+  // Return stock images immediately for fast UX (AI images will be ready on next request)
+  console.log(`[IMAGES] Returning stock images for: ${exerciseName}`);
+  const getStockImages = (exName, exId) => {
+    const fallbackName = exName.toLowerCase();
     
     // Leg exercises
-    if (name.includes('squat') || name.includes('leg') || name.includes('lunge') || name.includes('deadlift')) {
+    if (fallbackName.includes('squat') || fallbackName.includes('leg') || fallbackName.includes('lunge') || fallbackName.includes('deadlift') || fallbackName.includes('calf')) {
       return [
         { id: `${exId}-1`, url: 'https://images.unsplash.com/photo-1574680096145-d05b474e2155?w=600&h=600&fit=crop', phase: 'start' },
         { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1434608519344-49d77a699e1d?w=600&h=600&fit=crop', phase: 'middle' },
@@ -1563,7 +3108,7 @@ app.post('/api/workout/generate-exercise-image', async (req, res) => {
     }
     
     // Chest/Push exercises
-    if (name.includes('press') || name.includes('push') || name.includes('chest') || name.includes('bench')) {
+    if (fallbackName.includes('press') || fallbackName.includes('push') || fallbackName.includes('chest') || fallbackName.includes('bench') || fallbackName.includes('fly')) {
       return [
         { id: `${exId}-1`, url: 'https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=600&h=600&fit=crop', phase: 'start' },
         { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1581009146145-b5ef050c149a?w=600&h=600&fit=crop', phase: 'middle' },
@@ -1572,7 +3117,7 @@ app.post('/api/workout/generate-exercise-image', async (req, res) => {
     }
     
     // Back/Pull exercises
-    if (name.includes('row') || name.includes('pull') || name.includes('back') || name.includes('lat')) {
+    if (fallbackName.includes('row') || fallbackName.includes('pull') || fallbackName.includes('back') || fallbackName.includes('lat') || fallbackName.includes('face')) {
       return [
         { id: `${exId}-1`, url: 'https://images.unsplash.com/photo-1603287681836-b174ce5074c2?w=600&h=600&fit=crop', phase: 'start' },
         { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1532029837206-abbe2b7620e3?w=600&h=600&fit=crop', phase: 'middle' },
@@ -1581,7 +3126,7 @@ app.post('/api/workout/generate-exercise-image', async (req, res) => {
     }
     
     // Arm/Bicep/Tricep exercises
-    if (name.includes('curl') || name.includes('bicep') || name.includes('tricep') || name.includes('arm')) {
+    if (fallbackName.includes('curl') || fallbackName.includes('bicep') || fallbackName.includes('tricep') || fallbackName.includes('arm') || fallbackName.includes('dip')) {
       return [
         { id: `${exId}-1`, url: 'https://images.unsplash.com/photo-1581009137042-c552e485697a?w=600&h=600&fit=crop', phase: 'start' },
         { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1584466977773-e625c37cdd50?w=600&h=600&fit=crop', phase: 'middle' },
@@ -1590,37 +3135,33 @@ app.post('/api/workout/generate-exercise-image', async (req, res) => {
     }
     
     // Shoulder exercises
-    if (name.includes('shoulder') || name.includes('raise') || name.includes('lateral') || name.includes('delt')) {
+    if (fallbackName.includes('shoulder') || fallbackName.includes('delt') || fallbackName.includes('raise') || fallbackName.includes('shrug')) {
       return [
         { id: `${exId}-1`, url: 'https://images.unsplash.com/photo-1541534741688-6078c6bfb5c5?w=600&h=600&fit=crop', phase: 'start' },
-        { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1579758629938-03607ccdbaba?w=600&h=600&fit=crop', phase: 'middle' },
-        { id: `${exId}-3`, url: 'https://images.unsplash.com/photo-1544033527-b192daee1f5b?w=600&h=600&fit=crop', phase: 'end' },
+        { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1532384748853-8f54a8f476e2?w=600&h=600&fit=crop', phase: 'middle' },
+        { id: `${exId}-3`, url: 'https://images.unsplash.com/photo-1534368959876-26bf04f2c947?w=600&h=600&fit=crop', phase: 'end' },
       ];
     }
     
     // Core/Ab exercises
-    if (name.includes('plank') || name.includes('crunch') || name.includes('core') || name.includes('ab')) {
+    if (fallbackName.includes('crunch') || fallbackName.includes('plank') || fallbackName.includes('ab') || fallbackName.includes('core') || fallbackName.includes('twist')) {
       return [
         { id: `${exId}-1`, url: 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=600&h=600&fit=crop', phase: 'start' },
         { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?w=600&h=600&fit=crop', phase: 'middle' },
-        { id: `${exId}-3`, url: 'https://images.unsplash.com/photo-1518611012118-696072aa579a?w=600&h=600&fit=crop', phase: 'end' },
+        { id: `${exId}-3`, url: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?w=600&h=600&fit=crop', phase: 'end' },
       ];
     }
     
-    // Default - general workout images
+    // Default fitness images
     return [
       { id: `${exId}-1`, url: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=600&h=600&fit=crop', phase: 'start' },
-      { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?w=600&h=600&fit=crop', phase: 'middle' },
-      { id: `${exId}-3`, url: 'https://images.unsplash.com/photo-1526506118085-60ce8714f8c5?w=600&h=600&fit=crop', phase: 'end' },
+      { id: `${exId}-2`, url: 'https://images.unsplash.com/photo-1549060279-7e168fcee0c2?w=600&h=600&fit=crop', phase: 'middle' },
+      { id: `${exId}-3`, url: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=600&h=600&fit=crop', phase: 'end' },
     ];
   };
   
-  // Return instantly with relevant stock images - no AI generation delay
-  console.log(`[AI-IMAGE] Returning instant images for: ${exerciseName}`);
-  return res.json({
-    success: true,
-    images: getFitnessImages(exerciseName, exerciseId),
-  });
+  const images = getStockImages(exerciseName, exerciseId);
+  return res.json({ success: true, images, source: 'stock' });
 });
 
 // AI Form Analysis endpoint - analyzes user's form via camera capture
@@ -1656,7 +3197,7 @@ app.post('/api/workout/analyze-form', async (req, res) => {
       : `data:image/jpeg;base64,${imageBase64}`;
     
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-5',
       messages: [
         {
           role: 'system',
@@ -1726,8 +3267,8 @@ Look at this image and coach the user directly. What should they do?`
           ]
         }
       ],
-      max_tokens: 250,
-      temperature: 0.2 // Low temperature for consistent, honest responses
+      max_completion_tokens: 250, // GPT-5 uses max_completion_tokens
+      // Note: GPT-5 only supports default temperature (1)
     });
     
     const content = completion.choices?.[0]?.message?.content || '';
@@ -1776,12 +3317,23 @@ Look at this image and coach the user directly. What should they do?`
 
 app.get('/api/nutrition/targets/:userId', async (req, res) => {
   try {
-    const onboarding = await Onboarding.findOne({ userId: req.params.userId });
+    const userId = req.params.userId;
+    const onboarding = await Onboarding.findOne({ userId });
     if (!onboarding?.data) return res.status(404).json({ success: false, message: 'No data found' });
     
     const targets = calculateNutritionTargets(onboarding.data);
     const today = new Date().toISOString().split('T')[0];
-    const logs = await NutritionLog.find({ userId: req.params.userId });
+    
+    // Get recent logs for AI mode analysis (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+    
+    const logs = await NutritionLog.find({ 
+      userId, 
+      date: { $gte: sevenDaysAgo } 
+    });
+    
     const todayLogs = logs.filter(l => l.date.toISOString().startsWith(today));
     
     const consumed = todayLogs.reduce((acc, log) => ({
@@ -1791,7 +3343,17 @@ app.get('/api/nutrition/targets/:userId', async (req, res) => {
       fats: acc.fats + (log.fats || 0),
     }), { calories: 0, protein: 0, carbs: 0, fats: 0 });
     
-    res.json({ success: true, targets, consumed });
+    // Always use AI to analyze nutrition mode (uses meal data if available, otherwise uses goal)
+    let finalTargets = { ...targets };
+    const aiMode = await analyzeNutritionModeWithAI(userId, targets, logs, onboarding.data);
+    if (aiMode) {
+      finalTargets.mode = aiMode.mode;
+      finalTargets.modeDescription = aiMode.modeDescription;
+      finalTargets.modeIcon = aiMode.modeIcon;
+      console.log(`[NUTRITION] AI Mode set: ${aiMode.mode} - ${aiMode.modeDescription}`);
+    }
+    
+    res.json({ success: true, targets: finalTargets, consumed });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Fetch failed', error: err.message });
   }
@@ -1814,6 +3376,416 @@ app.post('/api/nutrition/log', async (req, res) => {
     res.json({ success: true, log });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Log failed', error: err.message });
+  }
+});
+
+// AI Meal Estimation from Text Description
+app.post('/api/nutrition/estimate/text', async (req, res) => {
+  const { description, userId } = req.body;
+  
+  if (!description) {
+    return res.status(400).json({ success: false, message: 'Meal description required' });
+  }
+  
+  if (!openai) {
+    console.log('[NUTRITION] OpenAI not initialized - returning mock response');
+    return res.json({
+      success: true,
+      meal: {
+        name: description.slice(0, 50),
+        calories: 450,
+        protein: 35,
+        carbs: 40,
+        fats: 15,
+        confidence: 70,
+        items: [{ name: description, calories: 450, protein: 35, carbs: 40, fats: 15 }]
+      }
+    });
+  }
+  
+  try {
+    console.log(`[NUTRITION] AI estimating meal from text: "${description.slice(0, 50)}..."`);
+    
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a nutrition expert AI. Analyze the meal description and estimate its nutritional content.
+
+Be accurate but realistic. Consider typical portion sizes. If the user mentions specific quantities, use those.
+
+IMPORTANT: 
+- Provide practical estimates based on common serving sizes
+- If unclear, assume a standard adult portion
+- Round to reasonable whole numbers
+
+Respond ONLY in valid JSON format:
+{
+  "name": "Short descriptive name for the meal (max 30 chars)",
+  "calories": number,
+  "protein": number (grams),
+  "carbs": number (grams),
+  "fats": number (grams),
+  "confidence": number (0-100, how confident you are in this estimate),
+  "items": [
+    { "name": "item name", "calories": number, "protein": number, "carbs": number, "fats": number }
+  ]
+}`
+        },
+        {
+          role: 'user',
+          content: `Estimate the nutritional content of this meal: "${description}"`
+        }
+      ],
+      max_tokens: 500,
+      temperature: 0.3,
+    });
+    
+    const content = completion.choices?.[0]?.message?.content || '';
+    console.log('[NUTRITION] AI response:', content.slice(0, 200));
+    
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const meal = JSON.parse(jsonMatch[0]);
+        console.log(`[NUTRITION] ✅ Estimated: ${meal.name} - ${meal.calories} cal, ${meal.protein}g protein`);
+        return res.json({ success: true, meal });
+      }
+    } catch (parseErr) {
+      console.log('[NUTRITION] JSON parse error:', parseErr.message);
+    }
+    
+    // Fallback
+    res.json({
+      success: true,
+      meal: {
+        name: description.slice(0, 30),
+        calories: 400,
+        protein: 25,
+        carbs: 45,
+        fats: 15,
+        confidence: 50,
+        items: [{ name: description, calories: 400, protein: 25, carbs: 45, fats: 15 }]
+      }
+    });
+    
+  } catch (err) {
+    console.error('[NUTRITION] AI estimation failed:', err.message);
+    res.status(500).json({ success: false, message: 'Estimation failed', error: err.message });
+  }
+});
+
+// AI Meal Estimation from Photo
+app.post('/api/nutrition/estimate/photo', async (req, res) => {
+  const { imageBase64, userId } = req.body;
+  
+  if (!imageBase64) {
+    return res.status(400).json({ success: false, message: 'Image required' });
+  }
+  
+  if (!openai) {
+    console.log('[NUTRITION] OpenAI not initialized - returning mock response');
+    return res.json({
+      success: true,
+      meal: {
+        name: 'Scanned Meal',
+        calories: 550,
+        protein: 40,
+        carbs: 50,
+        fats: 20,
+        confidence: 65,
+        items: [{ name: 'Food items', calories: 550, protein: 40, carbs: 50, fats: 20 }]
+      }
+    });
+  }
+  
+  try {
+    console.log('[NUTRITION] AI analyzing meal photo...');
+    
+    const imageUrl = imageBase64.startsWith('data:') 
+      ? imageBase64 
+      : `data:image/jpeg;base64,${imageBase64}`;
+    
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a nutrition expert AI. Analyze the food in the image and estimate its nutritional content.
+
+IMPORTANT RULES:
+1. If the image does NOT contain food or a meal, respond with EXACTLY: {"error": "NOT_FOOD", "message": "This image does not appear to contain food. Please take a photo of your meal."}
+2. If the image is blurry, dark, or unrecognizable, respond with EXACTLY: {"error": "UNCLEAR", "message": "Could not clearly see the food. Please try again with better lighting."}
+3. Only if you can identify food, provide the nutritional estimate.
+
+For valid food images, respond in JSON format:
+{
+  "name": "Short descriptive name for the meal (max 30 chars)",
+  "calories": number,
+  "protein": number (grams),
+  "carbs": number (grams),
+  "fats": number (grams),
+  "confidence": number (0-100, how confident you are),
+  "items": [
+    { "name": "item name", "calories": number, "protein": number, "carbs": number, "fats": number }
+  ]
+}`
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Analyze this image. If it contains food, estimate its nutritional content. If it does NOT contain food, tell me it is not food.'
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageUrl,
+                detail: 'high'
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 600,
+    });
+    
+    const content = completion.choices?.[0]?.message?.content || '';
+    console.log('[NUTRITION] AI photo response:', content.slice(0, 200));
+    
+    // Try to parse JSON first
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        
+        // Check if AI returned an error object
+        if (parsed.error === 'NOT_FOOD') {
+          console.log('[NUTRITION] Image is not food');
+          return res.json({ 
+            success: false, 
+            message: parsed.message || 'This image does not appear to contain food. Please take a photo of your meal.',
+            error: 'not_food'
+          });
+        }
+        
+        if (parsed.error === 'UNCLEAR') {
+          console.log('[NUTRITION] Image is unclear');
+          return res.json({ 
+            success: false, 
+            message: parsed.message || 'Could not clearly see the food. Please try again with better lighting.',
+            error: 'unclear_image'
+          });
+        }
+        
+        // Valid meal response
+        if (parsed.calories !== undefined && parsed.protein !== undefined) {
+          console.log(`[NUTRITION] ✅ Photo estimated: ${parsed.name} - ${parsed.calories} cal, ${parsed.protein}g protein`);
+          return res.json({ success: true, meal: parsed });
+        }
+      }
+    } catch (parseErr) {
+      console.log('[NUTRITION] JSON parse error:', parseErr.message);
+    }
+    
+    // Check if AI indicates it can't analyze the image (text-based response)
+    const lowerContent = content.toLowerCase();
+    if (lowerContent.includes("unable to analyze") || 
+        lowerContent.includes("can't analyze") ||
+        lowerContent.includes("cannot analyze") ||
+        lowerContent.includes("no visible food") ||
+        lowerContent.includes("completely black") ||
+        lowerContent.includes("no food") ||
+        lowerContent.includes("doesn't appear to contain food") ||
+        lowerContent.includes("does not appear to contain food") ||
+        lowerContent.includes("not a food") ||
+        lowerContent.includes("isn't food") ||
+        lowerContent.includes("is not food") ||
+        lowerContent.includes("doesn't show food") ||
+        lowerContent.includes("does not show food") ||
+        lowerContent.includes("can't identify") ||
+        lowerContent.includes("cannot identify") ||
+        lowerContent.includes("unable to identify") ||
+        lowerContent.includes("not an image of food") ||
+        lowerContent.includes("no meal") ||
+        lowerContent.includes("not a meal")) {
+      console.log('[NUTRITION] AI could not analyze photo - not food or unclear');
+      return res.json({ 
+        success: false, 
+        message: 'This doesn\'t appear to be a meal. Please take a photo of the food you want to log.',
+        error: 'no_food_detected'
+      });
+    }
+    
+    // Fallback - AI gave a response but not in expected format
+    res.json({
+      success: false,
+      message: 'Could not analyze the photo properly. Please try again with a clearer image of your meal.',
+      error: 'parse_error'
+    });
+    
+  } catch (err) {
+    console.error('[NUTRITION] Photo analysis failed:', err.message);
+    res.status(500).json({ success: false, message: 'Photo analysis failed', error: err.message });
+  }
+});
+
+// Get nutrition history/meals for a user
+app.get('/api/nutrition/meals/:userId', async (req, res) => {
+  try {
+    const { date } = req.query;
+    const query = { userId: req.params.userId };
+    
+    if (date) {
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+      query.date = { $gte: startOfDay, $lte: endOfDay };
+    }
+    
+    const meals = await NutritionLog.find(query).sort({ date: -1 }).limit(50);
+    res.json({ success: true, meals });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Fetch failed', error: err.message });
+  }
+});
+
+// Get weekly nutrition summary
+app.get('/api/nutrition/weekly/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    
+    // Get user's nutrition targets
+    const onboarding = await Onboarding.findOne({ userId });
+    if (!onboarding?.data) {
+      return res.status(404).json({ success: false, message: 'No onboarding data' });
+    }
+    
+    const targets = calculateNutritionTargets(onboarding.data);
+    
+    // Get logs for the past 14 days (to cover current and previous week)
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+    fourteenDaysAgo.setHours(0, 0, 0, 0);
+    
+    const logs = await NutritionLog.find({
+      userId,
+      date: { $gte: fourteenDaysAgo }
+    });
+    
+    // Build week starting from Monday of the current week
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Find Monday of this week
+    const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+    
+    const weekData = [];
+    let streak = 0;
+    let totalCompliant = 0;
+    
+    // Build Mon-Sun week with actual data
+    for (let i = 0; i < 7; i++) {
+      const checkDate = new Date(monday);
+      checkDate.setDate(monday.getDate() + i);
+      checkDate.setHours(0, 0, 0, 0);
+      
+      const isToday = checkDate.toDateString() === today.toDateString();
+      const isFuture = checkDate > today;
+      
+      const dayLogs = logs.filter(log => {
+        const logDate = new Date(log.date);
+        return logDate.toDateString() === checkDate.toDateString();
+      });
+      
+      const dayTotals = dayLogs.reduce((acc, log) => ({
+        calories: acc.calories + (log.calories || 0),
+        protein: acc.protein + (log.protein || 0),
+      }), { calories: 0, protein: 0 });
+      
+      // Determine initial status
+      let status = 'notComplete';
+      if (isFuture) {
+        status = 'pending';
+      } else if (isToday) {
+        status = 'pending';
+      } else if (dayLogs.length > 0) {
+        // Past day with some logs - mark for AI analysis
+        const calorieCompliant = dayTotals.calories >= targets.calories * 0.85 && dayTotals.calories <= targets.calories * 1.15;
+        const proteinCompliant = dayTotals.protein >= targets.protein * 0.75;
+        status = (calorieCompliant && proteinCompliant) ? 'complete' : 'notComplete';
+        if (status === 'complete') totalCompliant++;
+      }
+      
+      weekData.push({
+        day: dayNames[checkDate.getDay()],
+        date: checkDate.toISOString().split('T')[0],
+        status,
+        calories: dayTotals.calories,
+        protein: dayTotals.protein,
+        mealsLogged: dayLogs.length,
+      });
+    }
+    
+    // Use AI to analyze discipline if there are logs
+    let aiInsight = null;
+    if (logs.length >= 2) {
+      const aiAnalysis = await analyzeDietDisciplineWithAI(weekData, targets, logs);
+      if (aiAnalysis) {
+        // Update weekData with AI analysis
+        if (aiAnalysis.weekData && Array.isArray(aiAnalysis.weekData)) {
+          aiAnalysis.weekData.forEach((aiDay, index) => {
+            if (weekData[index] && aiDay.status) {
+              // Only update past days, keep pending for today/future
+              if (weekData[index].status !== 'pending') {
+                weekData[index].status = aiDay.status;
+                weekData[index].reason = aiDay.reason;
+              }
+            }
+          });
+        }
+        // Use AI-calculated values
+        streak = aiAnalysis.streak || 0;
+        totalCompliant = weekData.filter(d => d.status === 'complete').length;
+        aiInsight = aiAnalysis.insight;
+      }
+    }
+    
+    // Recalculate streak based on final status
+    streak = 0;
+    for (let i = weekData.length - 1; i >= 0; i--) {
+      if (weekData[i].status === 'pending') continue;
+      if (weekData[i].status === 'complete') {
+        streak++;
+      } else {
+        break;
+      }
+    }
+    
+    // Calculate compliance
+    const pastDays = weekData.filter(d => d.status !== 'pending').length;
+    const compliance = pastDays > 0 ? Math.round((totalCompliant / pastDays) * 100) : 0;
+    
+    console.log(`[NUTRITION] Weekly: ${totalCompliant}/${pastDays} days complete, ${streak} streak`);
+    
+    res.json({
+      success: true,
+      targets,
+      weekData,
+      streak,
+      compliance,
+      totalCompliant,
+      insight: aiInsight,
+    });
+  } catch (err) {
+    console.error('[NUTRITION] Weekly summary error:', err);
+    res.status(500).json({ success: false, message: 'Fetch failed', error: err.message });
   }
 });
 
@@ -2068,10 +4040,41 @@ const generatePlanForUser = async (user) => {
 const generateExerciseImagesForBackground = async (exerciseId, exerciseName) => {
   if (!OPENAI_API_KEY) return null;
   
+  // Determine primary muscle group for highlighting
+  const name = exerciseName.toLowerCase();
+  let muscleGroup = 'full body';
+  let glowArea = 'entire form';
+  
+  if (name.includes('squat') || name.includes('leg') || name.includes('lunge') || name.includes('calf')) {
+    muscleGroup = 'leg muscles';
+    glowArea = 'thighs and calves';
+  } else if (name.includes('deadlift')) {
+    muscleGroup = 'back and leg muscles';
+    glowArea = 'lower back and hamstrings';
+  } else if (name.includes('press') || name.includes('push') || name.includes('chest') || name.includes('bench') || name.includes('fly')) {
+    muscleGroup = 'chest muscles';
+    glowArea = 'chest and front shoulders';
+  } else if (name.includes('row') || name.includes('pull') || name.includes('lat')) {
+    muscleGroup = 'back muscles';
+    glowArea = 'upper back and lats';
+  } else if (name.includes('curl') || name.includes('bicep')) {
+    muscleGroup = 'bicep muscles';
+    glowArea = 'front of upper arms';
+  } else if (name.includes('tricep') || name.includes('dip') || name.includes('extension')) {
+    muscleGroup = 'tricep muscles';
+    glowArea = 'back of upper arms';
+  } else if (name.includes('shoulder') || name.includes('delt') || name.includes('raise') || name.includes('shrug')) {
+    muscleGroup = 'shoulder muscles';
+    glowArea = 'shoulders and traps';
+  } else if (name.includes('crunch') || name.includes('plank') || name.includes('ab') || name.includes('core') || name.includes('twist')) {
+    muscleGroup = 'core muscles';
+    glowArea = 'abdominal region';
+  }
+  
   const phases = [
-    { id: 'start', description: 'starting position, muscles relaxed, body ready to begin the movement' },
-    { id: 'middle', description: 'mid-movement phase, muscles engaged, transitioning through the exercise' },
-    { id: 'end', description: 'peak contraction position, muscles fully squeezed, at the top of the movement' }
+    { id: 'start', description: 'starting position' },
+    { id: 'middle', description: 'mid-movement' },
+    { id: 'end', description: 'peak contraction' }
   ];
   
   const images = [];
@@ -2082,6 +4085,9 @@ const generateExerciseImagesForBackground = async (exerciseId, exerciseName) => 
     try {
       console.log(`[BG-JOB] Generating ${phase.id} image for ${exerciseName}...`);
       
+      // Use abstract robotic/mannequin style to avoid content filters
+      const prompt = `A sleek futuristic fitness robot mannequin demonstrating ${exerciseName} exercise in ${phase.description}. The robot has a metallic silver-gray frame with visible joint mechanisms. The ${glowArea} area is highlighted with bright neon orange and red LED lights showing muscle activation. Dark gym environment with dramatic lighting. High-tech fitness app style illustration. Professional, clean, modern design. No text.`;
+      
       const response = await fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST',
         headers: {
@@ -2090,7 +4096,7 @@ const generateExerciseImagesForBackground = async (exerciseId, exerciseName) => 
         },
         body: JSON.stringify({
           model: 'dall-e-3',
-          prompt: `Digital art of a glowing neon humanoid figure made of geometric wireframe lines performing ${exerciseName} exercise - ${phase.description}. The figure is an abstract robotic mannequin with cyan and magenta glowing edges on pure black background. Minimalist tech aesthetic, no realistic features, just clean geometric wireframe body shape. Tron-style digital art.`,
+          prompt: prompt,
           n: 1,
           size: '1024x1024',
           quality: 'standard',
@@ -2166,6 +4172,110 @@ const startBackgroundJobs = () => {
     runBackgroundGenerationJob();
   }, SIX_HOURS);
 };
+
+// =====================================================
+// TEST PUSH NOTIFICATION ENDPOINT (for testing with Expo Push API)
+// =====================================================
+
+/**
+ * Send a test push notification via Expo's Push API
+ * POST /api/test-notification
+ * Body: { expoPushToken: "ExponentPushToken[xxx]", title: "Test", body: "Hello" }
+ */
+app.post('/api/test-notification', async (req, res) => {
+  try {
+    const { expoPushToken, title = '🔔 Test Notification', body = 'This is a test notification from Mog.ai!' } = req.body;
+
+    if (!expoPushToken) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'expoPushToken is required',
+        hint: 'Get the token from your app - it looks like ExponentPushToken[xxxx]'
+      });
+    }
+
+    // Send via Expo Push API
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: expoPushToken,
+        sound: 'default',
+        title,
+        body,
+        data: { type: 'test', timestamp: new Date().toISOString() },
+      }),
+    });
+
+    const result = await response.json();
+    console.log('[PUSH] Test notification sent:', result);
+
+    res.json({
+      success: true,
+      message: 'Test notification sent!',
+      expoPushResult: result,
+    });
+  } catch (error) {
+    console.error('[PUSH] Test notification error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Send notification to all registered tokens (broadcast)
+ * POST /api/broadcast-notification
+ * Body: { title: "Title", body: "Message" }
+ */
+app.post('/api/broadcast-notification', async (req, res) => {
+  try {
+    const { title = '📢 Mog.ai Update', body = 'Check out what\'s new!' } = req.body;
+
+    // Get all users with push tokens
+    const users = await User.find({ expoPushToken: { $exists: true, $ne: null } });
+    
+    if (users.length === 0) {
+      return res.json({ success: true, message: 'No users with push tokens found', sentCount: 0 });
+    }
+
+    const messages = users.map(user => ({
+      to: user.expoPushToken,
+      sound: 'default',
+      title,
+      body,
+      data: { type: 'broadcast', timestamp: new Date().toISOString() },
+    }));
+
+    // Send in batches of 100 (Expo limit)
+    const chunks = [];
+    for (let i = 0; i < messages.length; i += 100) {
+      chunks.push(messages.slice(i, i + 100));
+    }
+
+    let successCount = 0;
+    for (const chunk of chunks) {
+      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(chunk),
+      });
+      const result = await response.json();
+      if (result.data) successCount += result.data.length;
+    }
+
+    console.log(`[PUSH] Broadcast sent to ${successCount} users`);
+    res.json({ success: true, message: `Broadcast sent to ${successCount} users`, sentCount: successCount });
+  } catch (error) {
+    console.error('[PUSH] Broadcast error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // =====================================================
 // START SERVER

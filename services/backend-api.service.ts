@@ -107,6 +107,24 @@ export class BackendAPI {
     }
   }
 
+  static async forgotPassword(email: string) {
+    try {
+      const response = await apiClient.post('/api/auth/forgot-password', { email });
+      return response.data;
+    } catch (error: any) {
+      throw error.response?.data || error;
+    }
+  }
+
+  static async resetPassword(email: string, code: string, newPassword: string) {
+    try {
+      const response = await apiClient.post('/api/auth/reset-password', { email, code, newPassword });
+      return response.data;
+    } catch (error: any) {
+      throw error.response?.data || error;
+    }
+  }
+
   static async login(email: string, password: string) {
     try {
       const response = await apiClient.post('/api/auth/login', { email, password });
@@ -207,7 +225,7 @@ export class BackendAPI {
     try {
       const response = await apiClient.post('/api/nutrition/log', {
         userId,
-        ...mealData,
+        meal: mealData,
       });
       return response.data;
     } catch (error: any) {
@@ -217,7 +235,43 @@ export class BackendAPI {
 
   static async getMeals(userId: string, date?: string) {
     try {
-      const response = await apiClient.get(`/api/nutrition/targets/${userId}`);
+      const url = date 
+        ? `/api/nutrition/meals/${userId}?date=${date}`
+        : `/api/nutrition/meals/${userId}`;
+      const response = await apiClient.get(url);
+      return response.data;
+    } catch (error: any) {
+      throw error.response?.data || error;
+    }
+  }
+
+  static async estimateMealFromText(userId: string, description: string) {
+    try {
+      const response = await apiClient.post('/api/nutrition/estimate/text', {
+        userId,
+        description,
+      });
+      return response.data;
+    } catch (error: any) {
+      throw error.response?.data || error;
+    }
+  }
+
+  static async estimateMealFromPhoto(userId: string, imageBase64: string) {
+    try {
+      const response = await apiClient.post('/api/nutrition/estimate/photo', {
+        userId,
+        imageBase64,
+      });
+      return response.data;
+    } catch (error: any) {
+      throw error.response?.data || error;
+    }
+  }
+
+  static async getWeeklyNutrition(userId: string) {
+    try {
+      const response = await apiClient.get(`/api/nutrition/weekly/${userId}`);
       return response.data;
     } catch (error: any) {
       throw error.response?.data || error;
@@ -280,7 +334,7 @@ export class BackendAPI {
 
   static async getWeeklyTrainingPlan(userId: string) {
     try {
-      const response = await apiClient.get(`/api/training/weekly/${userId}`);
+      const response = await apiClient.get(`/api/training/${userId}/weekly`);
       return response.data;
     } catch (error: any) {
       // If 404, plan needs to be generated
@@ -293,11 +347,16 @@ export class BackendAPI {
 
   static async generateWeeklyTrainingPlan(userId: string) {
     try {
-      const response = await apiClient.post(`/api/training/generate/${userId}`);
+      const response = await apiClient.post(`/api/training/${userId}/generate`);
       return response.data;
     } catch (error: any) {
       throw error.response?.data || error;
     }
+  }
+
+  // Alias for backward compatibility
+  static async generateAITrainingPlan(userId: string) {
+    return this.generateWeeklyTrainingPlan(userId);
   }
 
   static async generateExerciseImages(userId: string, exerciseId: string, exerciseName: string) {

@@ -8,6 +8,8 @@ const UserSchema = new mongoose.Schema({
   firstName: String,
   lastName: String,
   verificationCode: String,
+  resetCode: String,
+  resetCodeExpiry: Date,
   isVerified: { type: Boolean, default: false },
   mogScore: { type: Number, default: 0 },
   tier: { type: String, default: 'Unranked' },
