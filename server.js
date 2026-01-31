@@ -41,13 +41,22 @@ const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 
-// Create Gmail transporter
+// Create Gmail transporter with settings optimized for cloud hosting
 const emailTransporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // Use TLS
   auth: {
     user: GMAIL_USER,
     pass: GMAIL_APP_PASSWORD,
   },
+  tls: {
+    rejectUnauthorized: false, // Accept self-signed certs
+    minVersion: 'TLSv1.2'
+  },
+  connectionTimeout: 10000, // 10 seconds
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
 });
 
 // Verify email configuration on startup
